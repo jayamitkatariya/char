@@ -26,6 +26,11 @@ export const ArrowRight = (p: P) => (
     <path d="M5 12h14M13 6l6 6-6 6" />
   </Svg>
 );
+export const Download = (p: P) => (
+  <Svg {...p}>
+    <path d="M12 4v11M7 10.5l5 5 5-5M5 19.5h14" />
+  </Svg>
+);
 // Filled brand mark, so it doesn't go through the stroke wrapper.
 export const GitHub = (p: P) => (
   <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" {...p}>

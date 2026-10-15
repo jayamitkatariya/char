@@ -16,6 +16,7 @@ import {
   ArrowUp,
   Broom,
   Calendar,
+  Check,
   CheckSquare,
   Doc,
   Hash,
@@ -42,6 +43,14 @@ const STAGE_H = 536;
 const noop = () => () => {};
 const today = () =>
   new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+
+const NOTE_TODOS: [string, boolean][] = [
+  ["Finish the onboarding copy", true],
+  ["Record the 40-second demo", true],
+  ["Renew the domain before Friday", false],
+  ["Reply to Sam about the design review", false],
+  ["Write the waitlist email", false],
+];
 
 type TabDef = {
   label: string;
@@ -348,17 +357,33 @@ export default function HeroDemo() {
 
             {/* the note underneath */}
             <div className="relative h-[492px]">
-              <div className="absolute inset-x-0 top-0 px-9 pt-6 text-[14px] leading-[1.6] text-[var(--l-ink-soft)]" aria-hidden="true">
-                <div className="font-serif text-[22px] font-bold text-[var(--l-ink)]">Launch week</div>
-                <p className="mt-2">Goals for this week, roughly in order. Ship the notes app to the waitlist, then…</p>
-              </div>
-              <div className="absolute inset-x-0 bottom-0 px-9 pb-5 text-[14px] leading-[1.6] text-[var(--l-ink-soft)]" aria-hidden="true">
-                <p>keep the first launch small enough that we can actually help everyone.</p>
-                <p className="mt-2 flex items-center gap-2 font-semibold text-[var(--l-ink)]">
+              {/* one continuous note; the card floats over its top, the rest shows through below */}
+              <div className="hd-note" aria-hidden="true">
+                <div className="font-serif text-[22px] font-bold tracking-[-0.01em] text-[var(--l-ink)]">Launch week</div>
+                <p className="mt-1.5">Goals for this week, roughly in order. Ship the notes app to the waitlist, then…</p>
+                <ul className="hd-todo mt-3">
+                  {NOTE_TODOS.map(([text, done]) => (
+                    <li key={text} data-done={done ? "" : undefined}>
+                      <span className="hd-box">{done && <Check />}</span>
+                      {text}
+                    </li>
+                  ))}
+                </ul>
+                <div className="mt-4 text-[15px] font-semibold text-[var(--l-ink)]">From Monday&rsquo;s sync</div>
+                <ul className="hd-bullets">
+                  <li>Sam wants to move the design review, maybe Thursday?</li>
+                  <li>Pricing: start free, decide after the first 100 users</li>
+                  <li>Priya: onboarding asks for the API key too early</li>
+                </ul>
+                <p className="mt-3">
+                  Keep the first launch small enough that we can actually help everyone. Ten people who love it beat a
+                  thousand who signed up and left.
+                </p>
+                <p className="mt-3 flex items-center gap-2 font-medium text-[var(--l-ink)]">
                   <Users className="h-4 w-4 text-[#5b7fd6]" /> User interviews
                   <span className="font-normal text-[var(--l-ink-faint)]">/ Friday</span>
                 </p>
-                <p className="mt-1 flex items-center gap-2 font-semibold text-[var(--l-ink)]">
+                <p className="mt-1 flex items-center gap-2 font-medium text-[var(--l-ink)]">
                   <CheckSquare className="h-4 w-4 text-[#2f9e5b]" /> Launch checklist
                 </p>
               </div>

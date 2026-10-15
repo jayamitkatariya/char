@@ -4,7 +4,7 @@ import HeroBackdrop from "./HeroBackdrop";
 import HeroDemo from "./HeroDemo";
 import Logo from "./Logo";
 import TextScramble from "./TextScramble";
-import { ArrowRight, GitHub } from "./icons";
+import { Download, GitHub } from "./icons";
 
 export default function Hero() {
   return (
@@ -13,14 +13,14 @@ export default function Hero() {
 
       <header className="mx-auto flex max-w-[1240px] items-center justify-between px-5 pt-6 sm:px-8 sm:pt-7">
         <Logo className="text-[26px] sm:text-[28px]" />
-        <a
-          href={GITHUB_URL}
-          target="_blank"
-          rel="noopener"
-          className="l-underline font-mono text-[12.5px] lowercase text-[var(--l-ink-soft)] hover:text-[var(--l-ink)] lg:hidden"
-        >
-          github
-        </a>
+        <nav aria-label="Hero" className="hero-links flex items-center gap-5 font-mono text-[12.5px] lowercase text-[var(--l-ink-soft)] sm:gap-7">
+          <a href="#manifesto" className="l-underline hidden hover:text-[var(--l-ink)] sm:inline">
+            manifesto
+          </a>
+          <a href={GITHUB_URL} target="_blank" rel="noopener" className="l-underline hover:text-[var(--l-ink)]">
+            github
+          </a>
+        </nav>
       </header>
 
       <div className="mx-auto grid max-w-[1240px] items-center gap-x-10 gap-y-24 px-5 pb-16 pt-14 sm:px-8 sm:pt-20 lg:min-h-[calc(100svh-84px)] lg:grid-cols-[minmax(0,11fr)_minmax(0,13fr)] lg:pb-12 lg:pt-6 xl:gap-x-16">
@@ -50,11 +50,14 @@ export default function Hero() {
             matters, and turns loose notes into finished work.
           </p>
 
-          <div className="mt-8 flex flex-wrap items-center gap-x-5 gap-y-3">
+          <div className="hero-actions mt-8 flex flex-col gap-2.5 sm:flex-row sm:items-center sm:gap-3">
             <a href={DOWNLOAD_URL} target="_blank" rel="noopener" className="l-cta group">
-              <GitHub className="h-4 w-4" />
+              <Download className="l-cta-icon h-[17px] w-[17px]" />
               Download for macOS
-              <ArrowRight className="h-4 w-4 transition-transform duration-200 group-hover:translate-x-0.5" />
+            </a>
+            <a href={GITHUB_URL} target="_blank" rel="noopener" className="l-ghost">
+              <GitHub className="h-4 w-4" />
+              View source
             </a>
           </div>
           <p className="mt-3.5 font-mono text-[11.5px] lowercase tracking-[0.02em] text-[var(--l-ink-faint)]">
@@ -63,7 +66,7 @@ export default function Hero() {
         </div>
 
         {/* demo */}
-        <div className="relative mx-auto w-full max-w-[660px] lg:mt-16">
+        <div className="hero-stage relative mx-auto w-full max-w-[660px] lg:mt-16">
           <Annotation />
           <HeroDemo />
         </div>

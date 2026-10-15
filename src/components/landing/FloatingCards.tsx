@@ -3,14 +3,15 @@
 import { useEffect, useRef } from "react";
 import { prefersReducedMotion } from "@/lib/dither";
 
-// Blurred, tilted app cards drifting at the edges of the manifesto (xl+ only).
+// Softly blurred, tilted app cards drifting at the edges of the manifesto
+// (1400px+ only: any narrower and they run into the margin rule).
 // Each one moves at its own speed against the scroll for a soft parallax;
 // transforms are written straight to the DOM.
 
 const CARDS = [
-  { side: "left", top: "7%", rotate: -6, speed: 0.12, blur: 1.2 },
-  { side: "right", top: "30%", rotate: 5, speed: -0.08, blur: 1.6 },
-  { side: "left", top: "62%", rotate: 4, speed: 0.06, blur: 2 },
+  { side: "left", top: "7%", rotate: -6, speed: 0.12, blur: 0.5 },
+  { side: "right", top: "30%", rotate: 5, speed: -0.08, blur: 0.8 },
+  { side: "left", top: "62%", rotate: 4, speed: 0.06, blur: 1.1 },
 ] as const;
 
 function Reminders() {
@@ -96,7 +97,7 @@ export default function FloatingCards() {
   }, []);
 
   return (
-    <div className="pointer-events-none absolute inset-0 hidden select-none xl:block" aria-hidden="true">
+    <div className="pointer-events-none absolute inset-0 hidden select-none min-[1400px]:block" aria-hidden="true">
       {CARDS.map((c, i) => (
         <div
           key={i}
@@ -111,7 +112,7 @@ export default function FloatingCards() {
               refs.current[i] = el;
             }}
             className="will-change-transform"
-            style={{ transform: `rotate(${c.rotate}deg)`, filter: `blur(${c.blur}px)`, opacity: 0.78 }}
+            style={{ transform: `rotate(${c.rotate}deg)`, filter: `blur(${c.blur}px)`, opacity: 0.85 }}
           >
             {CONTENT[i]}
           </div>

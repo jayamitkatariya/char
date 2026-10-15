@@ -4,8 +4,9 @@ import { useEffect, useRef } from "react";
 
 // A VS Code-style minimap of the whole page (lg+): blocks and text lines are
 // measured from the real layout and drawn into a tiny canvas, with a viewport
-// rectangle on top. Click or drag it to scroll. Decorative for assistive tech
-// (it duplicates normal scrolling), so it's aria-hidden.
+// rectangle on top. Click or drag it to scroll. It only shows between the hero
+// and the footer, so it never sits on the demo tabs or the wordmark.
+// Decorative for assistive tech (it duplicates normal scrolling), so it's aria-hidden.
 
 const W = 104;
 const MAX_H = 210;
@@ -90,8 +91,14 @@ export default function Minimap() {
       place();
     };
 
+    const hero = document.getElementById("hero");
+    const footer = document.querySelector('[data-mm="footer"]');
     const place = () => {
       frame = 0;
+      const vh = window.innerHeight;
+      const pastHero = hero ? hero.getBoundingClientRect().bottom < vh * 0.35 : true;
+      const beforeFooter = footer ? footer.getBoundingClientRect().top > vh - 40 : true;
+      wrap.toggleAttribute("data-shown", pastHero && beforeFooter);
       view.style.transform = `translateY(${(window.scrollY * sy).toFixed(2)}px)`;
       view.style.height = `${Math.max(8, window.innerHeight * sy)}px`;
     };

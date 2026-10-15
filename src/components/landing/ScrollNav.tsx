@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { GITHUB_URL } from "@/lib/site";
+import { DOWNLOAD_URL, GITHUB_URL } from "@/lib/site";
 import Logo from "./Logo";
 
 // A minimal fixed nav that fades in (with backdrop blur) once the hero has
@@ -38,13 +38,16 @@ export default function ScrollNav() {
           <a href="#manifesto" className="l-underline hidden hover:text-[var(--l-ink)] sm:inline">
             manifesto
           </a>
+          <a href={GITHUB_URL} target="_blank" rel="noopener" className="l-underline hidden hover:text-[var(--l-ink)] sm:inline">
+            github
+          </a>
           <a
-            href={GITHUB_URL}
+            href={DOWNLOAD_URL}
             target="_blank"
             rel="noopener"
-            className="rounded-full bg-[var(--l-cta)] px-3.5 py-1.5 text-white transition-opacity hover:opacity-90"
+            className="inline-flex h-8 items-center rounded-full bg-[var(--l-cta)] px-3.5 text-white transition-colors hover:bg-[#3b362d]"
           >
-            get it on github →
+            download
           </a>
         </div>
       </nav>

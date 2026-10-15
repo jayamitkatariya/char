@@ -1,5 +1,5 @@
-import { DOWNLOAD_URL } from "@/lib/site";
-import { ArrowRight, GitHub } from "./icons";
+import { DOWNLOAD_URL, GITHUB_URL } from "@/lib/site";
+import { Download, GitHub } from "./icons";
 
 // "From notes to done." — the o in "notes" is an empty hand-drawn checkbox,
 // the o in "done" gets a red check that draws itself once the heading is in view.
@@ -18,27 +18,32 @@ function Box({ checked = false }: { checked?: boolean }) {
 
 export default function FinalCta() {
   return (
-    <section id="start" className="relative px-5 pb-28 pt-28 text-center sm:pb-36 sm:pt-36" data-mm="cta">
+    <section id="start" className="relative px-5 pb-24 pt-28 text-center sm:pb-32 sm:pt-40" data-mm="cta">
       <h2 className="cta-head font-serif font-bold text-[var(--l-ink)]" data-reveal>
         <span className="sr-only">From notes to done.</span>
         <span aria-hidden="true">
-          From n<Box />
-          tes to d<Box checked />
-          ne.
+          <span className="whitespace-nowrap">From n<Box />tes</span>{" "}
+          <span className="whitespace-nowrap">to d<Box checked />ne.</span>
         </span>
       </h2>
-      <p className="mx-auto mt-6 max-w-md text-[18px] leading-[1.5] text-[var(--l-ink-faint)] sm:text-[20px]">
+      <p className="mx-auto mt-6 max-w-md text-[18px] leading-[1.5] text-[var(--l-ink-soft)] sm:text-[20px]">
         Stop collecting to-dos.
         <br />
         Start crossing them off.
       </p>
-      <div className="mt-9 flex justify-center">
+      <div className="mx-auto mt-9 flex max-w-[300px] flex-col gap-2.5 sm:max-w-none sm:flex-row sm:items-center sm:justify-center sm:gap-3">
         <a href={DOWNLOAD_URL} target="_blank" rel="noopener" className="l-cta group">
-          <GitHub className="h-4 w-4" />
+          <Download className="l-cta-icon h-[17px] w-[17px]" />
           Download for macOS
-          <ArrowRight className="h-4 w-4 transition-transform duration-200 group-hover:translate-x-0.5" />
+        </a>
+        <a href={GITHUB_URL} target="_blank" rel="noopener" className="l-ghost">
+          <GitHub className="h-4 w-4" />
+          View source
         </a>
       </div>
+      <p className="mt-4 font-mono text-[11.5px] lowercase tracking-[0.02em] text-[var(--l-ink-faint)]">
+        macOS 12+ · apple silicon & intel
+      </p>
     </section>
   );
 }
