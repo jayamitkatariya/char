@@ -13,7 +13,7 @@ import {
   useCreateBlockNote,
   type DefaultReactSuggestionItem,
 } from "@blocknote/react";
-import { agentLabel, buildPrompt, startRun } from "@/lib/charlie";
+import { agentId, agentLabel, buildPrompt, isRunning, startRun, stopRun } from "@/lib/charlie";
 import type { Folder, Note } from "@/lib/types";
 import { newId } from "@/lib/useWorkspace";
 import { IconFolder, IconNote, IconPlus, IconTerminal, IconWand } from "../icons";
@@ -123,7 +123,9 @@ export default function Editor({ note, notes, folders, folderPath, onChange, onC
 
   /* ---------- @charlie ---------- */
 
-  const startCharlie = (task: string, links: string[], at: { after: Block } | { replace: Block }) => {
+  type StartOpts = { context?: string; followUp?: { previousTask: string; resume?: string } };
+
+  const startCharlie = (task: string, links: string[], at: { after: Block } | { replace: Block }, opts: StartOpts = {}) => {
     const { note, notes } = latest.current;
     const runId = newId("run");
     const card = { type: "agentRun" as const, props: { runId, noteId: note.id, task, agent: agentLabel(), status: "running" } };
@@ -142,8 +144,35 @@ export default function Editor({ note, notes, folders, folderPath, onChange, onC
 
     const body = editor.blocksToMarkdownLossy(editor.document.filter((b) => b.type !== "agentRun"));
     const linked = links.map((id) => notes.find((n) => n.id === id)).filter((n): n is Note => !!n && n.id !== note.id);
-    startRun({ id: runId, noteId: note.id, task }, buildPrompt({ task, title: note.title, note: body, linked: linked.map((n) => ({ title: n.title, content: n.content })) }));
+    const prompt = buildPrompt({
+      task,
+      title: note.title,
+      note: body,
+      linked: linked.map((n) => ({ title: n.title, content: n.content })),
+      context: opts.context,
+      followUp: opts.followUp && { previousTask: opts.followUp.previousTask, resumed: !!opts.followUp.resume },
+    });
+    startRun({ id: runId, noteId: note.id, task }, prompt, { resume: opts.followUp?.resume });
   };
+
+  // From ⌘K: a "@charlie <task>" line at the end of the note, sent at once if there's a task.
+  // Subscribed every render, so it always starts runs with the current note.
+  useEffect(() => {
+    const charlie = (e: Event) => {
+      const task = ((e as CustomEvent<{ task?: string }>).detail?.task ?? "").trim();
+      const last = editor.document[editor.document.length - 1];
+      const lastEmpty = last && last.type === "paragraph" && Array.isArray(last.content) && last.content.length === 0;
+      const line = { type: "paragraph" as const, content: [{ type: "charlie" as const, props: {} }, ` ${task}`] };
+      if (lastEmpty) editor.replaceBlocks([last], [line]);
+      else editor.insertBlocks([line], last, "after");
+      const block = editor.document[editor.document.length - 1];
+      editor.setTextCursorPosition(block, "end");
+      editor.focus();
+      if (task) startCharlie(task, [], { after: block });
+    };
+    window.addEventListener("char:charlie", charlie);
+    return () => window.removeEventListener("char:charlie", charlie);
+  });
 
   useEffect(
     () =>
@@ -152,8 +181,17 @@ export default function Editor({ note, notes, folders, folderPath, onChange, onC
           const card = findRun(editor, runId);
           if (!card) return;
           const prev = editor.getPrevBlock(card);
-          const links = (prev && charlieTask(prev)?.links) || [];
-          startCharlie((card.props as { task: string }).task, links, { replace: card });
+          const ask = prev ? charlieTask(prev) : null;
+          startCharlie((card.props as { task: string }).task, ask?.links ?? [], { replace: card }, { context: ask?.context });
+        },
+        // From the footer under an answer: continue that agent's conversation if it's still the
+        // agent charlie uses (sessions belong to one agent), otherwise ask afresh with the note.
+        followUp: (runId, text) => {
+          const footer = findRun(editor, runId);
+          if (!footer) return;
+          const p = footer.props as { task: string; sessionId?: string; agentId?: string };
+          const resume = p.sessionId && p.agentId === agentId() ? p.sessionId : undefined;
+          startCharlie(text, [], { after: footer }, { followUp: { previousTask: p.task, resume } });
         },
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -166,6 +204,8 @@ export default function Editor({ note, notes, folders, folderPath, onChange, onC
 
   const onKeyDownCapture = (e: React.KeyboardEvent) => {
     if (e.nativeEvent.isComposing || e.metaKey || e.ctrlKey || e.altKey) return;
+    // Typing in a card's own fields (the follow-up box) isn't typing in the note.
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
     // Enter on a "@charlie …" line sends it instead of starting a new line.
     if (e.key === "Enter" && !e.shiftKey && !menuOpen()) {
       const block = editor.getTextCursorPosition().block;
@@ -174,7 +214,7 @@ export default function Editor({ note, notes, folders, folderPath, onChange, onC
       e.preventDefault();
       e.stopPropagation();
       if (!ask.task) return latest.current.onToast("Write what charlie should do after @charlie, then press Enter");
-      startCharlie(ask.task, ask.links, { after: block });
+      startCharlie(ask.task, ask.links, { after: block }, { context: ask.context });
       return;
     }
     if (e.key === " " && !menuOpen()) {
@@ -203,9 +243,26 @@ export default function Editor({ note, notes, folders, folderPath, onChange, onC
 
   /* ---------- saving ---------- */
 
+  // Runs whose card is in this note right now. A card that disappears while its run is still
+  // working (deleted, cut, undone) stops the run: the answer would have nowhere to go.
+  const liveCards = useRef(new Set<string>());
+  const watchCards = (doc: Block[]) => {
+    const now = new Set<string>();
+    const walk = (blocks: Block[]) => {
+      for (const b of blocks) {
+        if (b.type === "agentRun" && (b.props as { status: string }).status === "running") now.add((b.props as { runId: string }).runId);
+        walk(b.children as Block[]);
+      }
+    };
+    walk(doc);
+    for (const id of liveCards.current) if (!now.has(id) && isRunning(id)) void stopRun(id);
+    liveCards.current = now;
+  };
+
   const emit = () => {
     if (silent.current) return;
     const doc = editor.document;
+    watchCards(doc);
     onChange({ content: editor.blocksToMarkdownLossy(doc), blocks: JSON.stringify(doc), links: collectLinks(doc) });
   };
 

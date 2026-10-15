@@ -31,7 +31,9 @@ call the dentist about thursday
 
 ## Hand work to @charlie
 
-Type **@charlie**, then a task, and press Enter: "@charlie turn this note into a plan". charlie hands the note to a coding agent already on your Mac (Claude Code, Codex, OpenCode or Hermes) and writes the answer right here. Long answers get their own note. Pick the agent, its model and its working folder in Settings → Agents.
+Type **@charlie**, then a task, and press Enter: "@charlie turn this note into a plan". charlie hands the note to a coding agent already on your Mac (Claude Code, Codex, OpenCode or Hermes), shows its steps as it works, and writes the answer right here. Press **Follow up** under an answer to keep the conversation going. Long answers get their own note.
+
+In Settings → Agents, pick the agent, its model, its working folder and how much it may do. **Connectors** there can ask it to set up GitHub, your calendar, the web and more.
 
 ## Ask your notes
 

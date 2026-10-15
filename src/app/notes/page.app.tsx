@@ -9,7 +9,7 @@ import { SettingsDialog } from "@/components/app/SettingsDialog";
 import { Sidebar, type View } from "@/components/app/Sidebar";
 import { HomeView, ListView, NoteView, type SaveState } from "@/components/app/Views";
 import { isConfigured, loadAISettings, saveAISettings, type AISettings } from "@/lib/ai";
-import { isLongOutput, refreshAgentLabel, setRunFinisher, type Run } from "@/lib/charlie";
+import { isLongOutput, refreshAgentLabel, setRunFinisher, stopRunsOutside, type Run } from "@/lib/charlie";
 import { isDesktop, onMenu, onOpenLink, onUpdate, userName, type AgentEvent } from "@/lib/desktop";
 import { GITHUB_URL } from "@/lib/site";
 import type { Folder, Note } from "@/lib/types";
@@ -303,12 +303,19 @@ function Workspace() {
   useEffect(() => {
     finishRun.current = async (run, e) => {
       // Everything async that isn't about this note happens first.
-      const [{ applyRunResult }, { openEditor }, { applyRunToStoredNote }] = await Promise.all([
+      const [{ applyRunResult, findRun }, { openEditor }, { applyRunToStoredNote }] = await Promise.all([
         import("@/components/app/editorSchema"),
         import("@/components/app/editorRegistry"),
         import("@/components/app/offscreen"),
       ]);
       const origin = ws.getNote(run.noteId);
+      // The card may have been deleted while charlie worked (that stops the run, but it can finish first).
+      const cardThere = () => {
+        const editor = openEditor(run.noteId);
+        if (editor) return !!findRun(editor, run.id);
+        return !!ws.getNote(run.noteId)?.blocks?.includes(run.id);
+      };
+      if (!cardThere()) return;
       type Result = Parameters<typeof applyRunResult>[2];
       let result: Result;
       if (e.type === "done" && isLongOutput(e.output)) {
@@ -319,6 +326,15 @@ function Workspace() {
         result = { kind: "inline", markdown: e.output };
       } else {
         result = { kind: e.type, message: e.type === "error" ? e.message : "Stopped." };
+      }
+      if (e.type === "done") {
+        result.footer = {
+          agent: run.agent,
+          agentId: run.agentId ?? "",
+          sessionId: e.sessionId ?? run.sessionId ?? "",
+          durationMs: (run.finishedAt ?? Date.now()) - run.startedAt,
+          notice: e.notice ?? "",
+        };
       }
 
       const land = async () => {
@@ -347,6 +363,8 @@ function Workspace() {
   useEffect(() => {
     refreshAgentLabel();
   }, []);
+  // Deleting a note (or its folder) stops charlie's runs in it.
+  useEffect(() => stopRunsOutside(new Set(notes.map((n) => n.id))), [notes]);
 
   /* ---------- the menu bar and char:// links ---------- */
 
@@ -566,6 +584,8 @@ function Workspace() {
           onNewFolder={() => createFolder(null)}
           onAsk={(q) => ask(q)}
           onSettings={() => setSettingsTab("ai")}
+          onAgentSettings={() => setSettingsTab("agents")}
+          noteTitle={currentNote ? currentNote.title : null}
         />
       )}
 

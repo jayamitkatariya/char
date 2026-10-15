@@ -2,7 +2,9 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Folder, Note } from "@/lib/types";
-import { IconFolder, IconNote, IconPlus, IconSearch, IconSettings, IconSparkle } from "../icons";
+import { agentLabel } from "@/lib/charlie";
+import { isDesktop } from "@/lib/desktop";
+import { IconFolder, IconNote, IconPlus, IconSearch, IconSettings, IconSparkle, IconTerminal, IconWand } from "../icons";
 import { plainText } from "./Markdown";
 import type { View } from "./Sidebar";
 
@@ -18,6 +20,9 @@ type Props = {
   onNewFolder: () => void;
   onAsk: (question: string) => void;
   onSettings: () => void;
+  onAgentSettings: () => void;
+  /** The open note, if any: @charlie and Tidy work on it. */
+  noteTitle: string | null;
 };
 
 function snippet(text: string, q: string) {
@@ -76,12 +81,26 @@ export function CommandPalette(p: Props) {
       ...(q
         ? [{ key: "ask", icon: <IconSparkle size={15} />, title: `Ask char: “${query.trim()}”`, run: close(() => p.onAsk(query.trim())) }]
         : []),
+      ...(p.noteTitle !== null && isDesktop()
+        ? [
+            {
+              key: "charlie",
+              icon: <IconTerminal size={15} />,
+              title: q ? `@charlie: “${query.trim()}”` : "Ask charlie…",
+              sub: q ? `Sends it to ${agentLabel()} from “${p.noteTitle || "Untitled"}”` : `Type a task first; it goes to ${agentLabel()} from this note`,
+              // Without a task this just puts the chip at the end of the note to type into.
+              run: close(() => window.dispatchEvent(new CustomEvent("char:charlie", { detail: { task: query.trim() } }))),
+            },
+            { key: "tidy", icon: <IconWand size={15} />, title: "Tidy this note", sub: "Loose lines into to-dos and bullets (⌘⇧T)", run: close(() => window.dispatchEvent(new Event("char:tidy"))) },
+          ]
+        : []),
       { key: "folder", icon: <IconFolder size={15} />, title: "New folder", run: close(p.onNewFolder) },
       { key: "settings", icon: <IconSettings size={15} />, title: "Settings & AI key", run: close(p.onSettings) },
+      ...(isDesktop() ? [{ key: "agents", icon: <IconTerminal size={15} />, title: "charlie's agent settings", run: close(p.onAgentSettings) }] : []),
     ];
     return [...noteHits, ...folderHits, ...actions];
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q, query, p.notes, p.folders]);
+  }, [q, query, p.notes, p.folders, p.noteTitle]);
 
   useEffect(() => {
     listRef.current?.querySelector(`[data-i="${active}"]`)?.scrollIntoView({ block: "nearest" });

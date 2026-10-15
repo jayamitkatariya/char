@@ -2,7 +2,7 @@
 // and @charlie, which hands tasks to a coding agent installed on this Mac (see ./agents.js).
 
 const { app, BrowserWindow, Menu, dialog, ipcMain, net, protocol, screen, session, shell } = require("electron");
-const { execFileSync } = require("node:child_process");
+const { execFile, execFileSync } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -125,23 +125,35 @@ ipcMain.handle("char:take-pending-open", (e) => {
 });
 
 ipcMain.handle("agent:detect", guard(() => agents.detect()));
+ipcMain.handle("agent:status", guard((_e, agentId) => agents.status(agentId)));
 ipcMain.handle("agent:models", guard((_e, agentId) => agents.models(agentId)));
+ipcMain.handle("agent:mcp", guard((_e, agentId) => agents.mcpList(agentId)));
+ipcMain.handle("agent:transcript", guard((_e, runId) => agents.transcript(String(runId))));
 ipcMain.handle("agent:get-config", guard(() => getAgentConfig()));
-// Settings that let charlie run something new, or run with full access somewhere new, are
-// confirmed in a native dialog the page can't click through itself.
+
+const ownerWindow = (e) => BrowserWindow.fromWebContents(e.sender) ?? undefined;
+const LEVEL_WORDS = { read: "read files", edit: "edit files in it", full: "edit files and run commands there without asking" };
+
+// Settings that let charlie run something new, or do more somewhere new, are confirmed in a
+// native dialog the page can't click through itself.
 ipcMain.handle(
   "agent:set-config",
   guard(async (e, config) => {
     const old = getAgentConfig();
     const next = agents.normalizeConfig(config);
+    const was = agents.effectiveLevel(old);
+    const now = agents.effectiveLevel(next);
+    const rank = (l) => agents.LEVELS.indexOf(l);
     const newCommand = next.agent === "custom" && (old.agent !== "custom" || old.custom !== next.custom);
-    const newPower = next.full && (!old.full || old.cwd !== next.cwd || old.agent !== next.agent || newCommand);
+    const newPower = now !== "read" && (rank(now) > rank(was) || old.cwd !== next.cwd || old.agent !== next.agent || newCommand);
     if (newCommand || newPower) {
       const who = next.agent === "custom" ? `the command “${next.custom}”` : agents.AGENTS[next.agent].label;
-      const { response } = await dialog.showMessageBox(BrowserWindow.fromWebContents(e.sender) ?? undefined, {
-        type: next.full ? "warning" : "question",
-        message: next.full ? `Let charlie run ${who} with full access?` : `Let charlie run ${who}?`,
-        detail: `It will run in ${next.cwd}${next.full ? " and can edit files and run commands there without asking" : ""}, each time you send it a task from a note.`,
+      const { response } = await dialog.showMessageBox(ownerWindow(e), {
+        type: now === "full" ? "warning" : "question",
+        message: now === "full" ? `Let charlie run ${who} with full access?` : `Let charlie run ${who}?`,
+        detail: `It will run in ${next.cwd} and can ${LEVEL_WORDS[now]}, each time you send it a task from a note.${
+          next.agent === "hermes" ? " Hermes approves its own actions in one-shot mode, so it always runs with full access." : ""
+        }`,
         buttons: ["Allow", "Cancel"],
         defaultId: 1,
         cancelId: 1,
@@ -161,22 +173,62 @@ ipcMain.handle("agent:pick-folder", async (e) => {
   });
   return res.canceled ? null : res.filePaths[0];
 });
+
+function startRun(e, runId, prompt, opts) {
+  const target = e.sender;
+  watchOwner(target);
+  agents.run(
+    runId,
+    prompt,
+    getAgentConfig(),
+    (event) => {
+      if (!target.isDestroyed()) target.send("agent:event", { runId, ...event });
+    },
+    target.id,
+    opts,
+  );
+}
+
 // The renderer sends only the task and the note context; which program runs, where, and with
 // which permissions comes from agent.json, which only the Settings screen writes.
 ipcMain.handle(
   "agent:run",
-  guard((e, { runId, prompt }) => {
-    const target = e.sender;
-    watchOwner(target);
-    agents.run(
-      runId,
-      prompt,
-      getAgentConfig(),
-      (event) => {
-        if (!target.isDestroyed()) target.send("agent:event", { runId, ...event });
-      },
-      target.id,
-    );
+  guard((e, { runId, prompt, resume, task }) =>
+    startRun(e, String(runId), String(prompt), { resume: typeof resume === "string" ? resume : undefined, task: typeof task === "string" ? task.slice(0, 500) : undefined }),
+  ),
+);
+
+// Connector setup asks the agent to install and sign in to a tool for itself, which needs full
+// access whatever charlie's usual level is, so every one is confirmed natively, showing the prompt.
+ipcMain.handle(
+  "agent:setup",
+  guard(async (e, { runId, name, prompt }) => {
+    const config = getAgentConfig();
+    const who = config.agent === "custom" ? config.custom : agents.AGENTS[config.agent].label;
+    const { response } = await dialog.showMessageBox(ownerWindow(e), {
+      type: "warning",
+      message: `Let ${who} set up ${String(name).slice(0, 60)} with full access?`,
+      detail: `It runs in ${config.cwd} and may install tools, edit its own settings and open your browser to sign in. It will be asked:\n\n${String(prompt).slice(0, 900)}`,
+      buttons: ["Set up", "Cancel"],
+      defaultId: 1,
+      cancelId: 1,
+    });
+    if (response !== 0) return false;
+    startRun(e, String(runId), String(prompt), { level: "full", task: `Set up ${name}` });
+    return true;
+  }),
+);
+
+// Signing in to an agent is interactive (a browser, a code to paste), so it happens in Terminal.
+// Only the agent's own fixed sign-in command can be opened, never text from the page.
+ipcMain.handle(
+  "agent:sign-in",
+  guard(async (_e, agentId) => {
+    const cmd = agents.signInCommand(agentId);
+    if (!cmd) return false;
+    const script = `tell application "Terminal"\nactivate\ndo script "${cmd.join(" ")}"\nend tell`;
+    execFile("osascript", ["-e", script], () => {});
+    return true;
   }),
 );
 ipcMain.handle("agent:stop", guard((_e, runId) => agents.stop(runId)));
@@ -517,6 +569,7 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.whenReady().then(() => {
+    agents.setLogDir(userFile("runs"));
     // Only the installed app claims char:// links; a dev build would otherwise steal them.
     if (app.isPackaged) app.setAsDefaultProtocolClient("char");
     app.setAboutPanelOptions({

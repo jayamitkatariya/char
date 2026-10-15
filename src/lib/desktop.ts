@@ -5,12 +5,22 @@ import type { Folder, Note } from "./types";
 export type WorkspaceData = { folders: Folder[]; notes: Note[] };
 
 export type AgentId = "claude" | "opencode" | "hermes" | "codex" | "custom";
-export type AgentConfig = { agent: AgentId; custom: string; cwd: string; full: boolean; models: Partial<Record<Exclude<AgentId, "custom">, string>> };
-export type DetectedAgents = Record<Exclude<AgentId, "custom">, { label: string; path: string | null; version: string | null }>;
+export type BuiltInAgent = Exclude<AgentId, "custom">;
+/** What charlie may do in its folder: look only, also edit files, or anything without asking. */
+export type AgentLevel = "read" | "edit" | "full";
+export type AgentConfig = { agent: AgentId; custom: string; cwd: string; level: AgentLevel; models: Partial<Record<BuiltInAgent, string>> };
+export type DetectedAgents = Record<BuiltInAgent, { label: string; path: string | null; version: string | null; levels: AgentLevel[] }>;
+export type AgentStatus = { installed: boolean; signedIn: boolean | null; detail: string; defaultModel: string | null; signIn: string };
+export type AgentStep = { tool: string; detail: string };
+export type TranscriptEntry = { t: number; type: string; [k: string]: unknown };
 export type AgentEvent = { runId: string } & (
-  | { type: "start"; agent: string }
+  | { type: "queued" }
+  | { type: "start"; agent: string; level?: AgentLevel; resumed?: boolean }
+  | { type: "session"; id: string }
+  | { type: "step"; step: AgentStep }
   | { type: "progress"; line: string }
-  | { type: "done"; output: string }
+  | { type: "quiet"; since: number }
+  | { type: "done"; output: string; sessionId?: string; notice?: string }
   | { type: "error"; message: string }
   | { type: "stopped" }
 );
@@ -30,11 +40,17 @@ type Bridge = {
   allowAI: (baseUrl: string) => Promise<void>;
   agent: {
     detect: () => Promise<DetectedAgents>;
-    models: (agentId: Exclude<AgentId, "custom">) => Promise<string[]>;
+    status: (agentId: BuiltInAgent) => Promise<AgentStatus | null>;
+    models: (agentId: BuiltInAgent) => Promise<string[]>;
+    mcpList: (agentId: BuiltInAgent) => Promise<string>;
+    transcript: (runId: string) => Promise<TranscriptEntry[]>;
+    signIn: (agentId: BuiltInAgent) => Promise<boolean>;
     getConfig: () => Promise<AgentConfig>;
     setConfig: (config: AgentConfig) => Promise<AgentConfig>;
     pickFolder: () => Promise<string | null>;
-    run: (runId: string, prompt: string) => Promise<void>;
+    run: (runId: string, prompt: string, opts?: { resume?: string; task?: string }) => Promise<void>;
+    /** Asks the agent to set up a connector for itself, at full access, after a native confirm. */
+    setup: (runId: string, name: string, prompt: string) => Promise<boolean>;
     stop: (runId: string) => Promise<boolean>;
     onEvent: (cb: (e: AgentEvent) => void) => () => void;
   };

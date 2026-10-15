@@ -33,11 +33,16 @@ contextBridge.exposeInMainWorld("char", {
 
   agent: {
     detect: () => ipcRenderer.invoke("agent:detect"),
+    status: (agentId) => ipcRenderer.invoke("agent:status", agentId),
     models: (agentId) => ipcRenderer.invoke("agent:models", agentId),
+    mcpList: (agentId) => ipcRenderer.invoke("agent:mcp", agentId),
+    transcript: (runId) => ipcRenderer.invoke("agent:transcript", runId),
+    signIn: (agentId) => ipcRenderer.invoke("agent:sign-in", agentId),
     getConfig: () => ipcRenderer.invoke("agent:get-config"),
     setConfig: (config) => ipcRenderer.invoke("agent:set-config", config),
     pickFolder: () => ipcRenderer.invoke("agent:pick-folder"),
-    run: (runId, prompt) => ipcRenderer.invoke("agent:run", { runId, prompt }),
+    run: (runId, prompt, opts) => ipcRenderer.invoke("agent:run", { runId, prompt, resume: opts?.resume, task: opts?.task }),
+    setup: (runId, name, prompt) => ipcRenderer.invoke("agent:setup", { runId, name, prompt }),
     stop: (runId) => ipcRenderer.invoke("agent:stop", runId),
     onEvent: (cb) => listen("agent:event", cb),
   },

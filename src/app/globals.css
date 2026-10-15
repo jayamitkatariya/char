@@ -526,6 +526,104 @@ html[data-fullscreen] .lights-left {
 .charlie-error {
   color: var(--danger);
 }
+.charlie-card[data-state="queued"] {
+  border-style: dashed;
+}
+.charlie-card[data-state="undone"],
+.charlie-card[data-state="interrupted"] {
+  border-style: dashed;
+}
+.charlie-card[data-state="undone"] .charlie-error,
+.charlie-card[data-state="interrupted"] .charlie-error,
+.charlie-card[data-state="stopped"] .charlie-error {
+  color: var(--ink-faint);
+}
+/* What the agent did: tool calls, newest last. */
+.charlie-steps {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 11.5px;
+  color: var(--ink-soft);
+}
+.charlie-steps[data-all="true"] {
+  max-height: 220px;
+  overflow-y: auto;
+}
+.charlie-steps li {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+  line-height: 1.5;
+}
+.charlie-steps li::before {
+  content: "›";
+  color: var(--ink-faint);
+}
+.charlie-steps li[data-kind="error"] {
+  color: var(--danger);
+}
+.charlie-step-tool {
+  flex: none;
+  font-weight: 700;
+  color: var(--ink);
+}
+.charlie-step-detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.charlie-step-more {
+  color: var(--ink-faint);
+}
+.charlie-step-more::before {
+  content: "" !important;
+}
+/* The slim line under an answer: who answered, its steps, and a follow-up. */
+.charlie-footer {
+  width: 100%;
+  margin: 0 0 6px;
+  padding: 3px 4px 3px 6px;
+  border-top: 1px dashed var(--hairline);
+  font-size: 13px;
+  opacity: 0.75;
+  transition: opacity 0.15s;
+}
+.charlie-footer:hover,
+.charlie-footer:focus-within {
+  opacity: 1;
+}
+.charlie-footer .charlie-badge {
+  font-size: 10.5px;
+  padding: 0 7px 0 5px;
+}
+.charlie-notice {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+.charlie-followup {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+.charlie-followup input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--hairline);
+  background: var(--card);
+  font-size: 13.5px;
+  outline: none;
+}
+.charlie-followup input:focus {
+  border-color: var(--ink-soft);
+}
 .charlie-dots {
   display: inline-block;
   width: 18px;

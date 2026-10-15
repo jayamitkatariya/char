@@ -1,7 +1,7 @@
 {
   "name": "char",
   "productName": "char",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "description": "The AI notepad that gets things done. Local-first, open source, for macOS.",
   "author": "Jay Katariya",

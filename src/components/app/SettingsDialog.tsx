@@ -2,10 +2,23 @@
 
 import { useEffect, useRef, useState } from "react";
 import { isConfigured, listModels, PRESETS, type AISettings } from "@/lib/ai";
-import { refreshAgentLabel } from "@/lib/charlie";
-import { agentBridge, dataPath, revealData, type AgentConfig, type AgentId, type DetectedAgents } from "@/lib/desktop";
-import type { WorkspaceData } from "@/lib/useWorkspace";
-import { IconCheck, IconDownload, IconFolder, IconSparkle, IconTerminal, IconUpload, IconX } from "../icons";
+import { elapsed, refreshAgentLabel } from "@/lib/charlie";
+import { CONNECTORS, setupPrompt } from "@/lib/connectors";
+import {
+  agentBridge,
+  dataPath,
+  revealData,
+  type AgentConfig,
+  type AgentId,
+  type AgentLevel,
+  type AgentStatus,
+  type AgentStep,
+  type BuiltInAgent,
+  type DetectedAgents,
+} from "@/lib/desktop";
+import { newId, type WorkspaceData } from "@/lib/useWorkspace";
+import { IconCheck, IconDownload, IconFolder, IconRetry, IconSparkle, IconTerminal, IconUpload, IconX } from "../icons";
+import { Markdown } from "./Markdown";
 
 type Tab = "ai" | "agents" | "data" | "storage";
 
@@ -349,16 +362,120 @@ function DataTab({ data, onImport }: { data: WorkspaceData; onImport: (d: Worksp
 
 /* ---------- @charlie ---------- */
 
-const AGENT_ORDER: Exclude<AgentId, "custom">[] = ["claude", "codex", "opencode", "hermes"];
+const AGENT_ORDER: BuiltInAgent[] = ["claude", "codex", "opencode", "hermes"];
+
+const LEVEL_TEXT: Record<AgentLevel, [string, string]> = {
+  read: ["Read only", "Reads files and the web, and answers. Can't change anything."],
+  edit: ["Can edit files", "Also creates and edits files in the working folder. Commands that need approval are skipped."],
+  full: ["Full access", "Edits files and runs any command in the working folder without asking. Only for a folder you trust it with."],
+};
+
+const MODEL_HINT: Record<BuiltInAgent, string> = {
+  claude: "an alias (opus, sonnet, haiku, fable) or a full model id",
+  codex: "the model name Codex accepts with --model",
+  opencode: "provider/model, as in `opencode models`",
+  hermes: "provider:model from your Hermes providers, or a model name",
+};
+
+/** A run started from Settings (the test, a connector setup), watched until it ends. */
+type Watched = { id: string; status: "running" | "done" | "error" | "stopped"; steps: AgentStep[]; line: string; output: string; startedAt: number; ms?: number };
+
+function useWatchedRun(onDone?: () => void) {
+  const [run, setRun] = useState<Watched | null>(null);
+  const current = useRef<string | null>(null);
+  const done = useRef(onDone);
+  useEffect(() => {
+    done.current = onDone;
+  });
+  useEffect(
+    () =>
+      agentBridge().onEvent((e) => {
+        if (e.runId !== current.current) return;
+        if (e.type === "done") done.current?.();
+        setRun((r) => {
+          if (!r || r.id !== e.runId) return r;
+          const ms = Date.now() - r.startedAt;
+          if (e.type === "step") return { ...r, steps: [...r.steps, e.step].slice(-200), line: "" };
+          if (e.type === "progress") return { ...r, line: e.line };
+          if (e.type === "start") return { ...r, startedAt: Date.now() };
+          if (e.type === "done") return { ...r, status: "done", output: e.output + (e.notice ? `\n\n*${e.notice}*` : ""), ms };
+          if (e.type === "error") return { ...r, status: "error", output: e.message, ms };
+          if (e.type === "stopped") return { ...r, status: "stopped", ms };
+          return r;
+        });
+      }),
+    [],
+  );
+  // A run still going when Settings closes is stopped.
+  useEffect(() => () => void (current.current && agentBridge().stop(current.current)), []);
+  const begin = (id: string) => {
+    current.current = id;
+    setRun({ id, status: "running", steps: [], line: "", output: "", startedAt: Date.now() });
+  };
+  const stop = () => current.current && agentBridge().stop(current.current);
+  return { run, begin, stop, clear: () => setRun(null) };
+}
+
+function RunView({ run, onStop }: { run: Watched; onStop: () => void }) {
+  return (
+    <div className="card !shadow-none mt-2 p-3" role="status">
+      <ol className="charlie-steps" data-all>
+        {run.steps.map((s, i) => (
+          <li key={i}>
+            <span className="charlie-step-tool">{s.tool}</span>
+            {s.detail && <span className="charlie-step-detail">{s.detail}</span>}
+          </li>
+        ))}
+      </ol>
+      {run.status === "running" ? (
+        <div className="flex items-center gap-2">
+          <p className="charlie-line flex-1">
+            <span className="charlie-dots" aria-hidden />
+            {run.line || "working… (agents can take a few seconds to start)"}
+          </p>
+          <button className="btn btn-ghost btn-sm" onClick={onStop}>
+            Stop
+          </button>
+        </div>
+      ) : run.status === "error" ? (
+        <p className="charlie-error !line-clamp-none">{run.output}</p>
+      ) : run.status === "stopped" ? (
+        <p className="charlie-line">Stopped.</p>
+      ) : (
+        <div className="prose-sm mt-1 text-[13px]">
+          <Markdown text={run.output} />
+        </div>
+      )}
+      {run.ms !== undefined && <p className="label mt-1.5">{elapsed(run.ms)}</p>}
+    </div>
+  );
+}
 
 function AgentsTab() {
   const [found, setFound] = useState<DetectedAgents | null>(null);
+  const [statuses, setStatuses] = useState<Partial<Record<BuiltInAgent, AgentStatus | null>>>({});
   const [draft, setDraft] = useState<AgentConfig | null>(null);
   const [saved, setSaved] = useState<AgentConfig | null>(null);
-  const [test, setTest] = useState<{ kind: "idle" | "busy" | "ok" | "error"; msg?: string }>({ kind: "idle" });
-  const testRun = useRef<string | null>(null);
   const [modelList, setModelList] = useState<{ agent: AgentId; ids: string[] } | null>(null);
+  const [modelsAsked, setModelsAsked] = useState(0);
+  const test = useWatchedRun();
   const agentId = draft?.agent;
+
+  const look = () => {
+    const bridge = agentBridge();
+    bridge.detect().then(setFound);
+    for (const id of AGENT_ORDER) bridge.status(id).then((s) => setStatuses((m) => ({ ...m, [id]: s })));
+  };
+
+  useEffect(() => {
+    agentBridge()
+      .getConfig()
+      .then((c) => {
+        setDraft(c);
+        setSaved(c);
+      });
+    look();
+  }, []);
 
   // What the chosen agent can run, for the model picker (OpenCode asks its providers, which takes a moment).
   useEffect(() => {
@@ -370,31 +487,16 @@ function AgentsTab() {
     return () => {
       live = false;
     };
-  }, [agentId]);
-
-  useEffect(() => {
-    const bridge = agentBridge();
-    bridge.getConfig().then((c) => {
-      setDraft(c);
-      setSaved(c);
-    });
-    bridge.detect().then(setFound);
-    return bridge.onEvent((e) => {
-      if (e.runId !== testRun.current) return;
-      if (e.type === "done") setTest({ kind: "ok", msg: `Answered: “${e.output.slice(0, 80)}”` });
-      else if (e.type === "error") setTest({ kind: "error", msg: e.message });
-      else if (e.type === "stopped") setTest({ kind: "idle" });
-      if (e.type === "done" || e.type === "error" || e.type === "stopped") testRun.current = null;
-    });
-  }, []);
-
-  // A test in flight is stopped if the tab closes.
-  useEffect(() => () => void (testRun.current && agentBridge().stop(testRun.current)), []);
+  }, [agentId, modelsAsked]);
 
   if (!draft) return <p className="label">loading…</p>;
 
   const dirty = JSON.stringify(draft) !== JSON.stringify(saved);
-  const installed = draft.agent === "custom" ? !!draft.custom.trim() : !!found?.[draft.agent]?.path;
+  const builtIn = draft.agent === "custom" ? null : draft.agent;
+  const installed = builtIn ? !!found?.[builtIn]?.path : !!draft.custom.trim();
+  const status = builtIn ? statuses[builtIn] : null;
+  const offered: AgentLevel[] = builtIn ? (found?.[builtIn]?.levels ?? ["read", "edit", "full"]) : ["full"];
+  const level: AgentLevel = offered.includes(draft.level) ? draft.level : offered[offered.length - 1];
 
   const save = async () => {
     const next = await agentBridge().setConfig(draft);
@@ -405,10 +507,11 @@ function AgentsTab() {
   };
 
   const runTest = async () => {
-    await save();
-    const id = `test-${Date.now()}`;
-    testRun.current = id;
-    setTest({ kind: "busy" });
+    const next = await save();
+    // A cancelled confirm keeps the old settings: test what's actually saved, but say so.
+    if (JSON.stringify(next) !== JSON.stringify(draft)) return;
+    const id = newId("test");
+    test.begin(id);
     agentBridge().run(id, "This is a connection test from the char notepad. Reply with exactly the word: ready");
   };
 
@@ -419,15 +522,31 @@ function AgentsTab() {
           <IconTerminal size={13} className="inline -mt-0.5" />
         </span>{" "}
         Type <span className="kbd">@charlie</span> in any note, then a task, and press Enter. charlie hands the note (and notes it links to) to the
-        agent below, runs it in the working folder, and writes the answer into the note. Long answers get a note of their own.
+        agent below, shows its steps as it works, and writes the answer into the note. Under each answer, <b>Follow up</b> continues the same
+        conversation.
       </p>
 
       <div>
-        <span className="label mb-2 block">agent</span>
+        <div className="mb-2 flex items-center">
+          <span className="label flex-1">agent</span>
+          <button
+            className="btn btn-ghost btn-sm"
+            onClick={() => {
+              setFound(null);
+              setStatuses({});
+              look();
+            }}
+            title="Look for installed agents again"
+          >
+            <IconRetry size={12} /> Check again
+          </button>
+        </div>
         <div className="grid grid-cols-2 gap-1.5">
           {AGENT_ORDER.map((id) => {
             const a = found?.[id];
+            const st = statuses[id];
             const on = draft.agent === id;
+            const sub = !found ? "looking…" : !a?.path ? "not installed" : st?.signedIn === false ? "not signed in" : (a.version ?? "installed");
             return (
               <button
                 key={id}
@@ -438,11 +557,11 @@ function AgentsTab() {
               >
                 <span className="min-w-0 flex-1">
                   <span className="block text-[13px] font-medium">{a?.label ?? id}</span>
-                  <span className={`block truncate font-mono text-[10.5px] ${on ? "text-white/70" : "text-[var(--ink-faint)]"}`}>
-                    {!found ? "looking…" : a?.path ? (a.version ?? "installed") : "not installed"}
+                  <span className={`block truncate font-mono text-[10.5px] ${on ? "text-white/70" : st?.signedIn === false ? "text-[var(--danger)]" : "text-[var(--ink-faint)]"}`}>
+                    {sub}
                   </span>
                 </span>
-                {a?.path && <IconCheck size={13} />}
+                {a?.path && st?.signedIn !== false && <IconCheck size={13} />}
               </button>
             );
           })}
@@ -455,20 +574,44 @@ function AgentsTab() {
             Custom command
           </button>
         </div>
-        {draft.agent !== "custom" && (
+
+        {builtIn && found && (
+          <div className="mt-2 text-[12.5px] text-[var(--ink-soft)]">
+            {!installed ? (
+              <p>
+                {found[builtIn].label} isn&apos;t installed (charlie looked on your login shell&apos;s PATH). Install it, then press Check again.
+              </p>
+            ) : status?.signedIn === false ? (
+              <p className="flex flex-wrap items-center gap-2">
+                <span className="text-[var(--danger)]">{found[builtIn].label} isn&apos;t signed in{status.detail && status.detail !== "not signed in" ? ` (${status.detail})` : ""}.</span>
+                <button className="btn btn-sm" onClick={() => agentBridge().signIn(builtIn)}>
+                  <IconTerminal size={12} /> Sign in, in Terminal
+                </button>
+                <span className="font-mono text-[11.5px]">{status.signIn}</span>
+              </p>
+            ) : status ? (
+              <p>
+                {status.signedIn ? "Ready" : "Installed"}
+                {status.detail ? ` · ${status.detail}` : ""}
+              </p>
+            ) : (
+              <p>Checking sign-in…</p>
+            )}
+          </div>
+        )}
+
+        {builtIn && (
           <ModelPicker
-            key={draft.agent}
-            value={draft.models[draft.agent] ?? ""}
-            options={modelList?.agent === draft.agent ? modelList.ids : null}
-            listable={draft.agent === "claude" || draft.agent === "opencode"}
-            hint={
-              draft.agent === "opencode"
-                ? "provider/model, as in `opencode models`"
-                : draft.agent === "claude"
-                  ? "an alias (opus, sonnet, haiku, fable) or a full model id"
-                  : "the model name the CLI accepts with --model"
-            }
-            onChange={(model) => setDraft({ ...draft, models: { ...draft.models, [draft.agent]: model } })}
+            key={builtIn}
+            value={draft.models[builtIn] ?? ""}
+            fallback={status?.defaultModel ?? null}
+            options={modelList?.agent === builtIn ? modelList.ids : null}
+            hint={MODEL_HINT[builtIn]}
+            onRefresh={() => {
+              setModelList(null);
+              setModelsAsked((n) => n + 1);
+            }}
+            onChange={(model) => setDraft({ ...draft, models: { ...draft.models, [builtIn]: model } })}
           />
         )}
         {draft.agent === "custom" && (
@@ -509,63 +652,151 @@ function AgentsTab() {
       </div>
 
       <div>
-        <span className="label mb-2 block">permissions</span>
+        <span className="label mb-2 block">access</span>
         <div className="space-y-1.5">
-          {(
-            [
-              [false, "Ask first", "Reads and answers. Edits and commands follow the agent's own approval settings, so most are skipped."],
-              [true, "Full access", "Edits files and runs commands in the working folder without asking. Only use this with a folder you trust it with."],
-            ] as const
-          ).map(([full, title, body]) => (
-            <label
-              key={title}
-              className={`flex cursor-pointer gap-2.5 rounded-xl border px-3 py-2.5 ${draft.full === full ? "border-[var(--ink-soft)] bg-[var(--card)]" : "border-[var(--hairline)]"}`}
-            >
-              <input type="radio" className="mt-1" checked={draft.full === full} onChange={() => setDraft({ ...draft, full })} />
-              <span>
-                <span className="block text-[13px] font-medium">{title}</span>
-                <span className="block text-[12px] leading-relaxed text-[var(--ink-soft)]">{body}</span>
-              </span>
-            </label>
-          ))}
+          {(["read", "edit", "full"] as const).map((l) => {
+            const allowed = offered.includes(l);
+            const [title, body] = LEVEL_TEXT[l];
+            return (
+              <label
+                key={l}
+                className={`flex gap-2.5 rounded-xl border px-3 py-2.5 ${allowed ? "cursor-pointer" : "cursor-not-allowed opacity-50"} ${
+                  level === l ? "border-[var(--ink-soft)] bg-[var(--card)]" : "border-[var(--hairline)]"
+                }`}
+              >
+                <input type="radio" className="mt-1" disabled={!allowed} checked={level === l} onChange={() => setDraft({ ...draft, level: l })} />
+                <span>
+                  <span className="block text-[13px] font-medium">{title}</span>
+                  <span className="block text-[12px] leading-relaxed text-[var(--ink-soft)]">{body}</span>
+                </span>
+              </label>
+            );
+          })}
         </div>
+        {offered.length === 1 && (
+          <span className="mt-1.5 block text-[12px] text-[var(--ink-soft)]">
+            {draft.agent === "hermes"
+              ? "Hermes approves its own actions when charlie runs it, so it can only run with full access."
+              : "Your command decides what it may do, so charlie treats it as full access."}
+          </span>
+        )}
       </div>
 
-      {test.kind !== "idle" && (
-        <p className={`text-[12.5px] ${test.kind === "error" ? "text-[var(--danger)]" : test.kind === "ok" ? "text-[#3f7a3a]" : "text-[var(--ink-soft)]"}`} role="status">
-          {test.kind === "busy" ? "Asking the agent to say “ready”… (agents can take a few seconds to start)" : test.msg}
-        </p>
-      )}
+      {test.run && <RunView run={test.run} onStop={test.stop} />}
 
       <div className="hairline-t flex items-center gap-2 pt-4">
-        <button className="btn btn-sm" disabled={!installed || test.kind === "busy"} onClick={runTest}>
-          {test.kind === "busy" ? "Testing…" : "Test"}
+        <button className="btn btn-sm" disabled={!installed || test.run?.status === "running"} onClick={runTest}>
+          {test.run?.status === "running" ? "Testing…" : "Test"}
         </button>
-        {test.kind === "busy" && (
-          <button className="btn btn-ghost btn-sm" onClick={() => testRun.current && agentBridge().stop(testRun.current)}>
-            Cancel
-          </button>
-        )}
         <span className="flex-1" />
         {!dirty && saved && <span className="label">saved ✓</span>}
         <button className="btn btn-primary" disabled={!dirty || (draft.agent === "custom" && !draft.custom.trim())} onClick={save}>
           Save
         </button>
       </div>
+
+      {installed && <Connectors agent={draft.agent} label={builtIn ? (found?.[builtIn]?.label ?? builtIn) : "your command"} canSetUp={!dirty} />}
     </div>
   );
 }
 
-function ModelPicker(p: { value: string; options: string[] | null; listable: boolean; hint: string; onChange: (model: string) => void }) {
+/** What the agent can reach beyond its folder, and prompts that ask it to set more up. */
+function Connectors({ agent, label, canSetUp }: { agent: AgentId; label: string; canSetUp: boolean }) {
+  const [list, setList] = useState<string | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [custom, setCustom] = useState("");
+  const builtIn = agent === "custom" ? null : agent;
+  const listed = useRef(false);
+
+  const check = async () => {
+    if (!builtIn) return;
+    listed.current = true;
+    setChecking(true);
+    setList(await agentBridge().mcpList(builtIn).catch((e: Error) => e.message));
+    setChecking(false);
+  };
+
+  // A setup that finished changes what's connected.
+  const setup = useWatchedRun(() => listed.current && void check());
+
+  const start = async (name: string, goal: string) => {
+    const id = newId("setup");
+    setup.begin(id);
+    const ok = await agentBridge().setup(id, name, setupPrompt(agent, { name, goal }));
+    if (!ok) setup.clear();
+  };
+
+  const busy = setup.run?.status === "running";
+  return (
+    <div className="hairline-t space-y-3 pt-4">
+      <div className="flex items-center gap-2">
+        <span className="label flex-1">connectors</span>
+        {builtIn && (
+          <button className="btn btn-ghost btn-sm" disabled={checking} onClick={check}>
+            {checking ? "Checking…" : list === null ? "What's connected?" : "Check again"}
+          </button>
+        )}
+      </div>
+      <p className="text-[12.5px] leading-relaxed text-[var(--ink-soft)]">
+        Connectors let {label} reach your other tools (GitHub, your calendar, the web) when charlie runs it. Pick one and charlie asks {label} to set
+        it up for itself, with full access and after you confirm. If it needs you to sign in, it says how.
+      </p>
+      {list !== null && <pre className="card scroll-soft max-h-48 overflow-auto whitespace-pre-wrap px-3 py-2 font-mono text-[11.5px] text-[var(--ink-soft)]">{list || "Nothing connected yet."}</pre>}
+      <div className="grid grid-cols-2 gap-1.5">
+        {CONNECTORS.map((c) => (
+          <button
+            key={c.id}
+            className="rounded-xl border border-[var(--hairline)] bg-[var(--card)] px-3 py-2 text-left hover:bg-[var(--hover)] disabled:opacity-50"
+            disabled={busy || !canSetUp}
+            onClick={() => start(c.name, c.goal)}
+          >
+            <span className="block text-[13px] font-medium">{c.name}</span>
+            <span className="block truncate text-[11.5px] text-[var(--ink-faint)]">{c.blurb}</span>
+          </button>
+        ))}
+      </div>
+      <form
+        className="flex gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          const what = custom.trim();
+          if (what) start(what.length > 40 ? `${what.slice(0, 37)}…` : what, `use ${what}`);
+        }}
+      >
+        <input className="input !text-[13px]" value={custom} placeholder="Something else, e.g. “my Postgres database”" onChange={(e) => setCustom(e.target.value)} />
+        <button className="btn btn-sm" disabled={busy || !canSetUp || !custom.trim()} type="submit">
+          Set up
+        </button>
+      </form>
+      {!canSetUp && <p className="label">Save your agent settings first.</p>}
+      {setup.run && <RunView run={setup.run} onStop={setup.stop} />}
+    </div>
+  );
+}
+
+function ModelPicker(p: {
+  value: string;
+  fallback: string | null;
+  options: string[] | null;
+  hint: string;
+  onRefresh: () => void;
+  onChange: (model: string) => void;
+}) {
   const [filter, setFilter] = useState("");
   const shown = (p.options ?? []).filter((m) => m.toLowerCase().includes(filter.toLowerCase())).slice(0, 200);
+  const own = `agent's own default${p.fallback ? ` (${p.fallback})` : ""}`;
   return (
     <div className="mt-3">
-      <span className="label mb-1.5 block">default model</span>
+      <div className="mb-1.5 flex items-center">
+        <span className="label flex-1">default model</span>
+        <button className="btn btn-ghost btn-sm" onClick={p.onRefresh} title="Ask the agent for its models again">
+          <IconRetry size={12} /> Refresh
+        </button>
+      </div>
       <input
         className="input font-mono !text-[13px]"
         value={p.value}
-        placeholder="agent's own default"
+        placeholder={own}
         spellCheck={false}
         onChange={(e) => {
           p.onChange(e.target.value.trim());
@@ -573,30 +804,27 @@ function ModelPicker(p: { value: string; options: string[] | null; listable: boo
         }}
       />
       <span className="mt-1.5 block text-[12px] text-[var(--ink-soft)]">Leave empty to use the agent&apos;s own setting. Otherwise {p.hint}.</span>
-      {p.listable && (
-        <div className="scroll-soft mt-2 max-h-36 overflow-y-auto rounded-xl border border-[var(--hairline)] p-1">
-          {p.options === null ? (
-            <p className="label px-2.5 py-1.5">loading models…</p>
-          ) : shown.length === 0 ? (
-            <p className="label px-2.5 py-1.5">no matching models</p>
-          ) : (
-            [{ id: "", label: "agent's own default" }, ...shown.map((m) => ({ id: m, label: m }))].map((m) => (
-              <button
-                key={m.id || "default"}
-                className="row flex w-full items-center justify-between px-2.5 py-1.5 text-left font-mono text-[12.5px]"
-                data-selected={p.value === m.id}
-                onClick={() => {
-                  p.onChange(m.id);
-                  setFilter("");
-                }}
-              >
-                {m.label}
-                {p.value === m.id && <IconCheck size={13} />}
-              </button>
-            ))
-          )}
-        </div>
-      )}
+      <div className="scroll-soft mt-2 max-h-36 overflow-y-auto rounded-xl border border-[var(--hairline)] p-1">
+        {p.options === null ? (
+          <p className="label px-2.5 py-1.5">loading models…</p>
+        ) : (
+          [{ id: "", label: own }, ...shown.map((m) => ({ id: m, label: m }))].map((m) => (
+            <button
+              key={m.id || "default"}
+              className="row flex w-full items-center justify-between px-2.5 py-1.5 text-left font-mono text-[12.5px]"
+              data-selected={p.value === m.id}
+              onClick={() => {
+                p.onChange(m.id);
+                setFilter("");
+              }}
+            >
+              <span className="truncate">{m.label}</span>
+              {p.value === m.id && <IconCheck size={13} />}
+            </button>
+          ))
+        )}
+        {p.options !== null && !p.options.length && <p className="label px-2.5 py-1.5">The agent didn&apos;t list any models: type one above.</p>}
+      </div>
     </div>
   );
 }
