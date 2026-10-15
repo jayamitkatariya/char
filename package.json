@@ -1,26 +1,62 @@
 {
-  "name": "jknotes",
+  "name": "char",
+  "productName": "char",
   "version": "0.1.0",
   "private": true,
+  "description": "The AI notepad that gets things done. Local-first, open source, for macOS.",
+  "author": "Jay Katariya",
+  "license": "MIT",
+  "repository": "github:jayamitkatariya/char",
+  "main": "electron/main.js",
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "lint": "eslint"
-  },
-  "dependencies": {
-    "next": "16.4.1",
-    "react": "19.3.0",
-    "react-dom": "19.3.0"
+    "build": "rm -rf .next/types .next/dev/types out && next build",
+    "lint": "eslint",
+    "app:serve": "CHAR_TARGET=app next dev -p 3210",
+    "app:dev": "CHAR_DEV_URL=http://localhost:3210 electron .",
+    "app:start": "npm run app:build && electron .",
+    "app:dist": "npm run app:build && electron-builder --mac",
+    "app:build": "rm -rf .next/types .next/dev/types out && CHAR_TARGET=app next build"
   },
   "devDependencies": {
+    "@anthropic-ai/sdk": "^0.134.0",
+    "@blocknote/core": "^0.56.0",
+    "@blocknote/mantine": "^0.56.0",
+    "@blocknote/react": "^0.56.0",
     "@tailwindcss/turbopack": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "electron": "^44.7.2",
+    "electron-builder": "^26.15.3",
     "eslint": "^9",
     "eslint-config-next": "16.4.1",
+    "next": "16.4.1",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
     "tailwindcss": "^4",
     "typescript": "^5"
+  },
+  "build": {
+    "appId": "com.jaykatariya.char",
+    "productName": "char",
+    "files": [
+      "electron/**/*",
+      "out/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "identity": "-",
+      "hardenedRuntime": false
+    }
   }
 }

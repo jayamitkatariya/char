@@ -17,8 +17,6 @@
 /.next/
 /out/
 
-# production
-/build
 
 # misc
 .DS_Store
@@ -39,3 +37,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# electron-builder output
+/dist/
+
+# personal note exports (never commit or upload)
+/data/
