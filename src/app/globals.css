@@ -424,10 +424,196 @@ body {
   text-underline-offset: 3px;
 }
 
-/* Mac app: bars you can drag the window by. Controls inside them stay clickable. */
+/* Mac app: bars you can drag the window by. Controls inside them stay clickable, and so does
+   anything floating over a bar (menus, dialogs, the editor's toolbars), since a drag region
+   would otherwise swallow clicks on whatever sits on top of it. */
 .drag {
   -webkit-app-region: drag;
 }
-.drag :is(button, a, input, select, textarea, [role="button"]) {
+.drag :is(button, a, input, select, textarea, [role="button"], .card),
+[role="dialog"],
+.fixed,
+.bn-ui-container,
+.bn-container .bn-menu,
+.bn-toolbar,
+.bn-suggestion-menu,
+[data-floating-ui-portal],
+.mantine-Popover-dropdown,
+.mantine-Menu-dropdown,
+.mantine-Tooltip-tooltip {
   -webkit-app-region: no-drag;
+}
+
+/* Room for the traffic lights, which macOS hides in full screen (preload sets data-fullscreen). */
+.lights-top {
+  padding-top: 2.75rem;
+}
+.lights-left {
+  padding-left: 84px;
+}
+html[data-fullscreen] .lights-top {
+  padding-top: 1rem;
+}
+html[data-fullscreen] .lights-left {
+  padding-left: 1rem;
+}
+
+/* @charlie */
+.charlie-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 6px;
+  border-radius: 6px;
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 0.86em;
+  font-weight: 700;
+  color: #fff;
+  background: var(--accent);
+  line-height: 1.5;
+  user-select: none;
+}
+.charlie-card {
+  width: 100%;
+  margin: 2px 0 6px;
+  padding: 10px 12px 11px;
+  border-radius: 14px;
+  border: 1px solid var(--hairline);
+  background: var(--card);
+  box-shadow: 0 1px 2px rgba(43, 38, 32, 0.05);
+  font-size: 14px;
+}
+.charlie-card[data-state="running"] {
+  background: linear-gradient(var(--card), var(--card)) padding-box,
+    linear-gradient(110deg, var(--hairline) 30%, rgba(245, 158, 11, 0.55) 50%, var(--hairline) 70%) border-box;
+  background-size: 100% 100%, 250% 100%;
+  border-color: transparent;
+  animation: charlie-sheen 2.4s linear infinite;
+}
+.charlie-card[data-state="error"] {
+  border-color: rgba(194, 65, 12, 0.3);
+}
+.charlie-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 8px 1px 6px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 11.5px;
+  font-weight: 700;
+}
+.charlie-task {
+  margin-top: 8px;
+  font-weight: 500;
+  color: var(--ink);
+  line-height: 1.45;
+}
+.charlie-line,
+.charlie-error {
+  margin-top: 4px;
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 11.5px;
+  color: var(--ink-faint);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.charlie-error {
+  color: var(--danger);
+}
+.charlie-dots {
+  display: inline-block;
+  width: 18px;
+  margin-right: 4px;
+}
+.charlie-dots::after {
+  content: "…";
+  animation: charlie-dots 1.2s steps(4) infinite;
+  display: inline-block;
+  overflow: hidden;
+  vertical-align: bottom;
+  width: 0;
+}
+@keyframes charlie-dots {
+  to {
+    width: 1.2em;
+  }
+}
+@keyframes charlie-sheen {
+  from {
+    background-position: 0 0, 100% 0;
+  }
+  to {
+    background-position: 0 0, -150% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .charlie-card[data-state="running"],
+  .charlie-dots::after {
+    animation: none;
+  }
+}
+
+/* char is a light, paper-coloured app: keep native controls light even when macOS is in dark mode. */
+:root {
+  color-scheme: light;
+}
+
+/* Checklists: a soft rounded box that fills with ink and a check when done. The box sits in a
+   wrapper exactly one text line tall, so it centres on the first line even when the item wraps. */
+.char-editor .bn-block-content[data-content-type="checkListItem"] > div:has(> input) {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  /* one line of the item's text (BlockNote sets its inline content to line-height 1.5) */
+  line-height: 1.5;
+  height: 1lh;
+}
+.char-editor .bn-block-content[data-content-type="checkListItem"] > div > input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  flex-shrink: 0;
+  width: 17px;
+  height: 17px;
+  margin: 0 10px 0 2px;
+  border-radius: 5px;
+  border: 1.5px solid #b8b2a8;
+  background: var(--card);
+  display: inline-grid;
+  place-content: center;
+  cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease, transform 120ms ease;
+}
+.char-editor .bn-block-content[data-content-type="checkListItem"] > div > input[type="checkbox"]:hover {
+  border-color: var(--ink-soft);
+}
+.char-editor .bn-block-content[data-content-type="checkListItem"] > div > input[type="checkbox"]:active {
+  transform: scale(0.92);
+}
+.char-editor .bn-block-content[data-content-type="checkListItem"] > div > input[type="checkbox"]:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.char-editor .bn-block-content[data-content-type="checkListItem"] > div > input[type="checkbox"]::after {
+  content: "";
+  width: 9px;
+  height: 5px;
+  margin-top: -2px;
+  border-left: 2px solid #fff;
+  border-bottom: 2px solid #fff;
+  transform: rotate(-45deg) scale(0);
+  transition: transform 140ms ease;
+}
+.char-editor .bn-block-content[data-content-type="checkListItem"] > div > input[type="checkbox"]:checked::after {
+  transform: rotate(-45deg) scale(1);
+}
+.char-editor [data-content-type="checkListItem"][data-checked="true"] .bn-inline-content {
+  color: var(--ink-faint);
+  text-decoration: line-through;
+  text-decoration-color: rgba(43, 38, 32, 0.3);
 }

@@ -9,12 +9,14 @@ import { SettingsDialog } from "@/components/app/SettingsDialog";
 import { Sidebar, type View } from "@/components/app/Sidebar";
 import { HomeView, ListView, NoteView, type SaveState } from "@/components/app/Views";
 import { isConfigured, loadAISettings, saveAISettings, type AISettings } from "@/lib/ai";
-import { isDesktop, userName } from "@/lib/desktop";
+import { isLongOutput, refreshAgentLabel, setRunFinisher, type Run } from "@/lib/charlie";
+import { isDesktop, onMenu, onOpenLink, onUpdate, userName, type AgentEvent } from "@/lib/desktop";
 import { GITHUB_URL } from "@/lib/site";
 import type { Folder, Note } from "@/lib/types";
 import { DEFAULT_FOLDER, useWorkspace } from "@/lib/useWorkspace";
 
 const SAVE_DELAY_MS = 500;
+const SAVE_MAX_WAIT_MS = 2000;
 
 // AI settings and chat history are keyed by account; the desktop app has exactly one.
 const LOCAL_UID = "local";
@@ -89,12 +91,13 @@ function Workspace() {
   const [sidebarOpen, setSidebarOpen] = useState(() => !isMobile); // desktop: docked; mobile: drawer
   const [chatOpen, setChatOpen] = useState(false);
   const [palette, setPalette] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<null | "ai" | "data" | "storage">(null);
+  const [settingsTab, setSettingsTab] = useState<null | "ai" | "agents" | "data" | "storage">(null);
   const [ai, setAI] = useState<AISettings | null>(() => loadAISettings(uid));
   const [pendingQuestion, setPendingQuestion] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [update, setUpdate] = useState<{ version: string; url: string } | null>(null);
 
-  const pending = useRef(new Map<string, { patch: Partial<Note>; timer: ReturnType<typeof setTimeout> }>());
+  const pending = useRef(new Map<string, { patch: Partial<Note>; timer: ReturnType<typeof setTimeout>; since: number }>());
   const insertRef = useRef<((markdown: string) => void) | null>(null);
   const [canInsert, setCanInsert] = useState(false);
 
@@ -182,12 +185,24 @@ function Workspace() {
     const entry = pending.current.get(id);
     if (entry) clearTimeout(entry.timer);
     const merged = { ...(entry?.patch ?? {}), ...patch };
+    const since = entry?.since ?? Date.now();
+    // Typing without a pause still saves at least every couple of seconds.
+    const wait = Math.max(0, Math.min(SAVE_DELAY_MS, since + SAVE_MAX_WAIT_MS - Date.now()));
     const timer = setTimeout(() => {
       pending.current.delete(id);
       flush(id, merged);
-    }, SAVE_DELAY_MS);
-    pending.current.set(id, { patch: merged, timer });
+    }, wait);
+    pending.current.set(id, { patch: merged, timer, since });
     setSaveState("saving");
+  };
+
+  // Writes any typing still waiting in the debounce for this note.
+  const settle = async (id: string) => {
+    const entry = pending.current.get(id);
+    if (!entry) return;
+    clearTimeout(entry.timer);
+    pending.current.delete(id);
+    await flush(id, entry.patch);
   };
 
   const saveNow = (id: string, patch: Partial<Note>) => {
@@ -280,6 +295,77 @@ function Workspace() {
     setCanInsert(!!fn);
   }, []);
 
+  /* ---------- @charlie: where a finished run's answer goes ---------- */
+
+  const finishRun = useRef<(run: Run, e: Extract<AgentEvent, { type: "done" | "error" | "stopped" }>) => Promise<void>>(async () => {});
+  // Answers for the same note land one at a time, so two can't both start from the same copy.
+  const landing = useRef(new Map<string, Promise<void>>());
+  useEffect(() => {
+    finishRun.current = async (run, e) => {
+      // Everything async that isn't about this note happens first.
+      const [{ applyRunResult }, { openEditor }, { applyRunToStoredNote }] = await Promise.all([
+        import("@/components/app/editorSchema"),
+        import("@/components/app/editorRegistry"),
+        import("@/components/app/offscreen"),
+      ]);
+      const origin = ws.getNote(run.noteId);
+      type Result = Parameters<typeof applyRunResult>[2];
+      let result: Result;
+      if (e.type === "done" && isLongOutput(e.output)) {
+        const title = `charlie: ${run.task.length > 60 ? `${run.task.slice(0, 57)}…` : run.task}`;
+        const created = await ws.createNote(origin && folderById.has(origin.folderId) ? origin.folderId : targetFolder(), { title, content: e.output });
+        result = { kind: "link", noteId: created.id, title, lines: e.output.split("\n").length };
+      } else if (e.type === "done") {
+        result = { kind: "inline", markdown: e.output };
+      } else {
+        result = { kind: e.type, message: e.type === "error" ? e.message : "Stopped." };
+      }
+
+      const land = async () => {
+        if (!openEditor(run.noteId)) await settle(run.noteId);
+        // Checked again after the await: the note may have been opened meanwhile.
+        const editor = openEditor(run.noteId);
+        if (editor) {
+          applyRunResult(editor, run.id, result); // the editor's change event saves it
+          return;
+        }
+        const fresh = ws.getNote(run.noteId);
+        const patch = fresh && applyRunToStoredNote(fresh, run.id, result);
+        if (patch) await ws.updateNote(run.noteId, patch);
+      };
+      const queued = (landing.current.get(run.noteId) ?? Promise.resolve()).then(land, land);
+      landing.current.set(run.noteId, queued);
+      await queued;
+
+      const here = view.kind === "note" && view.id === run.noteId;
+      const where = origin && !here ? ` in “${origin.title.trim() || "Untitled"}”` : "";
+      if (e.type === "done") setToast(result.kind === "link" ? `charlie wrote “${result.title}”${where}` : `charlie finished${where}`);
+      else if (e.type === "error") setToast(`charlie couldn't finish${where}`);
+    };
+  });
+  useEffect(() => setRunFinisher((run, e) => void finishRun.current(run, e).catch((err: Error) => setToast(`charlie: ${err.message}`))), []);
+  useEffect(() => {
+    refreshAgentLabel();
+  }, []);
+
+  /* ---------- the menu bar and char:// links ---------- */
+
+  const menuAction = useRef<(action: string) => void>(() => {});
+  useEffect(() => {
+    menuAction.current = (action) => {
+      if (action === "settings") setSettingsTab("ai");
+      else if (action === "new-note") createNote();
+      else if (action === "new-folder") createFolder(null);
+      else if (action === "search") setPalette(true);
+      else if (action === "ask") setChatOpen((c) => !c);
+      else if (action === "toggle-sidebar") setSidebarOpen((s) => !s);
+      else if (action === "home") navigate({ kind: "home" });
+    };
+  });
+  useEffect(() => onMenu((a) => menuAction.current(a)), []);
+  useEffect(() => onUpdate(setUpdate), []);
+  useEffect(() => onOpenLink((t) => navigate(t.kind === "folder" ? { kind: "folder", id: t.id } : { kind: "note", id: t.id })), [navigate]);
+
   /* ---------- keyboard ---------- */
 
   useEffect(() => {
@@ -299,6 +385,9 @@ function Workspace() {
       } else if (k === "\\") {
         e.preventDefault();
         setSidebarOpen((s) => !s);
+      } else if (k === "t" && e.shiftKey && view.kind === "note") {
+        e.preventDefault();
+        window.dispatchEvent(new Event("char:tidy"));
       }
     };
     window.addEventListener("keydown", onKey);
@@ -492,6 +581,18 @@ function Workspace() {
           onImport={ws.importData}
           onClose={() => setSettingsTab(null)}
         />
+      )}
+
+      {update && (
+        <div className="pop-in fixed bottom-5 right-5 z-[55] flex items-center gap-2 rounded-full border border-[var(--hairline)] bg-[var(--card)] py-1.5 pl-4 pr-1.5 text-[13px] shadow-[var(--shadow-lg)]">
+          <span>char {update.version} is out</span>
+          <a className="btn btn-primary btn-sm" href={update.url} target="_blank" rel="noopener">
+            Download
+          </a>
+          <button className="icon-btn" aria-label="Dismiss" onClick={() => setUpdate(null)}>
+            ×
+          </button>
+        </div>
       )}
 
       {shownToast && (

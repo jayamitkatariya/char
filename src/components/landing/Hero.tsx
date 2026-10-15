@@ -1,4 +1,4 @@
-import { GITHUB_URL } from "@/lib/site";
+import { DOWNLOAD_URL, GITHUB_URL } from "@/lib/site";
 import Annotation from "./Annotation";
 import HeroBackdrop from "./HeroBackdrop";
 import HeroDemo from "./HeroDemo";
@@ -51,7 +51,7 @@ export default function Hero() {
           </p>
 
           <div className="mt-8 flex flex-wrap items-center gap-x-5 gap-y-3">
-            <a href={GITHUB_URL} target="_blank" rel="noopener" className="l-cta group">
+            <a href={DOWNLOAD_URL} target="_blank" rel="noopener" className="l-cta group">
               <GitHub className="h-4 w-4" />
               Download for macOS
               <ArrowRight className="h-4 w-4 transition-transform duration-200 group-hover:translate-x-0.5" />

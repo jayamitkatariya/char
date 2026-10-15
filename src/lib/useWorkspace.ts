@@ -23,6 +23,16 @@ const WELCOME = `Everything you write here is saved on this Mac as you type.
 - Press **⌘K** to jump to anything, **⌘N** for a new note.
 - Drag the handle on the left of a block to move it.
 
+- Press **⌘⇧T** to tidy loose lines into to-dos and bullets. Try it on the lines below.
+
+need to water the plants
+buy coffee, oat milk and bread
+call the dentist about thursday
+
+## Hand work to @charlie
+
+Type **@charlie**, then a task, and press Enter: "@charlie turn this note into a plan". charlie hands the note to a coding agent already on your Mac (Claude Code, Codex, OpenCode or Hermes) and writes the answer right here. Long answers get their own note. Pick the agent, its model and its working folder in Settings → Agents.
+
 ## Ask your notes
 
 Open **Ask char** (⌘J) to chat with an AI that can read every note. It's optional: add your own API key (Anthropic, OpenAI, OpenRouter, a local Ollama…) under Settings.`;
@@ -160,6 +170,8 @@ export function useWorkspace() {
     moveFolder,
     deleteFolder,
     importData,
+    /** The latest stored copy, including changes made since the last render. */
+    getNote: (id: string) => current.current?.notes.find((n) => n.id === id),
   };
 }
 

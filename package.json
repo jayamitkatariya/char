@@ -1,7 +1,7 @@
 {
   "name": "char",
   "productName": "char",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "description": "The AI notepad that gets things done. Local-first, open source, for macOS.",
   "author": "Jay Katariya",
@@ -10,13 +10,14 @@
   "main": "electron/main.js",
   "scripts": {
     "dev": "next dev",
-    "build": "rm -rf .next/types .next/dev/types out && next build",
+    "build": "rm -rf .next out && next build",
     "lint": "eslint",
     "app:serve": "CHAR_TARGET=app next dev -p 3210",
     "app:dev": "CHAR_DEV_URL=http://localhost:3210 electron .",
     "app:start": "npm run app:build && electron .",
     "app:dist": "npm run app:build && electron-builder --mac",
-    "app:build": "rm -rf .next/types .next/dev/types out && CHAR_TARGET=app next build"
+    "app:build": "rm -rf .next out && CHAR_TARGET=app next build",
+    "app:dist:adhoc": "npm run app:build && electron-builder --mac -c.mac.identity=- -c.mac.hardenedRuntime=false"
   },
   "devDependencies": {
     "@anthropic-ai/sdk": "^0.134.0",
@@ -52,11 +53,52 @@
     "mac": {
       "category": "public.app-category.productivity",
       "target": [
-        "dmg",
-        "zip"
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
       ],
-      "identity": "-",
-      "hardenedRuntime": false
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "minimumSystemVersion": "12.0"
+    },
+    "protocols": [
+      {
+        "name": "char note link",
+        "schemes": [
+          "char"
+        ]
+      }
+    ],
+    "artifactName": "${productName}-${arch}.${ext}",
+    "dmg": {
+      "title": "char",
+      "contents": [
+        {
+          "x": 150,
+          "y": 190
+        },
+        {
+          "x": 410,
+          "y": 190,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ],
+      "window": {
+        "width": 560,
+        "height": 380
+      }
     }
   }
 }

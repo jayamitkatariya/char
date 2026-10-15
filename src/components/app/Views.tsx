@@ -15,6 +15,7 @@ import {
   IconSparkle,
   IconSun,
   IconTrash,
+  IconWand,
 } from "../icons";
 import type { EditorChange } from "./Editor";
 import { plainText } from "./Markdown";
@@ -48,7 +49,7 @@ export function TopBar({
   return (
     <header
       className={`drag sticky top-0 z-20 flex h-12 shrink-0 items-center gap-2 bg-[var(--paper)]/85 px-3 backdrop-blur-md sm:px-4 ${
-        sidebarHidden ? "md:pl-[84px]" : "" /* clear the traffic lights when the sidebar is hidden */
+        sidebarHidden ? "lights-left" : "" /* clear the traffic lights when the sidebar is hidden */
       }`}
     >
       <button className={`icon-btn ${sidebarHidden ? "" : "md:hidden"}`} onClick={onShowSidebar} aria-label="Show sidebar">
@@ -172,7 +173,8 @@ export function NoteView(p: NoteViewProps) {
   const words = useMemo(() => plainText(note.content).split(/\s+/).filter(Boolean).length, [note.content]);
 
   const copyLink = async () => {
-    await navigator.clipboard.writeText(`${window.location.origin}/notes?n=${note.id}`);
+    // char:// links open this note in the app from anywhere (Messages, Mail, a terminal).
+    await navigator.clipboard.writeText(`char://note/${note.id}`);
     p.onToast("Link copied");
   };
   const exportMd = () => {
@@ -193,6 +195,14 @@ export function NoteView(p: NoteViewProps) {
             <span className="label mr-2 hidden sm:inline" aria-live="polite">
               {p.saveState === "saving" ? "saving…" : p.saveState === "error" ? "couldn't save" : "saved"}
             </span>
+            <button
+              className="icon-btn"
+              onClick={() => window.dispatchEvent(new Event("char:tidy"))}
+              title="Tidy: turn loose lines into to-dos and bullets (⌘⇧T)"
+              aria-label="Tidy into to-dos"
+            >
+              <IconWand size={15} />
+            </button>
             <button className="icon-btn" onClick={p.onTogglePin} title={note.pinned ? "Unpin" : "Pin"} aria-pressed={note.pinned}>
               <IconPin size={15} />
             </button>
@@ -268,7 +278,7 @@ export function NoteView(p: NoteViewProps) {
             </span>
             <span>·</span>
             <span>
-              type <span className="kbd">/</span> for blocks, <span className="kbd">@</span> to link
+              type <span className="kbd">/</span> for blocks, <span className="kbd">@</span> to link, <span className="kbd">@charlie</span> to hand off a task
             </span>
           </div>
 
@@ -281,6 +291,7 @@ export function NoteView(p: NoteViewProps) {
             onChange={p.onEditorChange}
             onCreateNote={p.onCreateNote}
             registerInsert={p.registerInsert}
+            onToast={p.onToast}
           />
 
           {backlinks.length > 0 && (
@@ -318,8 +329,13 @@ type ListViewProps = {
   onRename?: (name: string) => void;
 };
 
+// Big folders render a page of cards at a time; more appear as the list scrolls into view.
+const PAGE = 60;
+
 export function ListView(p: ListViewProps) {
   const [sort, setSort] = useState<"edited" | "title">("edited");
+  const [limit, setLimit] = useState(PAGE);
+  const more = useRef<HTMLDivElement>(null);
   const sorted = useMemo(
     () =>
       [...p.notes].sort((a, b) =>
@@ -327,6 +343,14 @@ export function ListView(p: ListViewProps) {
       ),
     [p.notes, sort],
   );
+
+  useEffect(() => {
+    const el = more.current;
+    if (!el) return;
+    const io = new IntersectionObserver((entries) => entries[0].isIntersecting && setLimit((l) => l + PAGE * 2), { rootMargin: "800px" });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [limit, sorted.length]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -385,11 +409,13 @@ export function ListView(p: ListViewProps) {
 
           {sorted.length ? (
             <div className="mt-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {sorted.map((n) => (
+              {sorted.slice(0, limit).map((n) => (
                 <NoteCard key={n.id} note={n} path={p.folder ? undefined : p.folderPath(n.folderId)} onOpen={() => p.onNavigate({ kind: "note", id: n.id })} />
               ))}
             </div>
-          ) : (
+          ) : null}
+          {sorted.length > limit && <div ref={more} className="h-px" aria-hidden />}
+          {sorted.length === 0 && (
             <div className="mt-16 text-center">
               <p className="font-hand -rotate-2 text-[28px] text-[var(--ink-soft)]">nothing here yet…</p>
               <button className="btn mt-4" onClick={p.onNewNote}>

@@ -1,12 +1,13 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { isConfigured, listModels, PRESETS, type AISettings } from "@/lib/ai";
-import { dataPath, revealData } from "@/lib/desktop";
+import { refreshAgentLabel } from "@/lib/charlie";
+import { agentBridge, dataPath, revealData, type AgentConfig, type AgentId, type DetectedAgents } from "@/lib/desktop";
 import type { WorkspaceData } from "@/lib/useWorkspace";
-import { IconCheck, IconDownload, IconSparkle, IconUpload, IconX } from "../icons";
+import { IconCheck, IconDownload, IconFolder, IconSparkle, IconTerminal, IconUpload, IconX } from "../icons";
 
-type Tab = "ai" | "data" | "storage";
+type Tab = "ai" | "agents" | "data" | "storage";
 
 type Props = {
   initialTab?: Tab;
@@ -22,6 +23,24 @@ const presetFor = (s: AISettings | null) =>
 
 export function SettingsDialog(p: Props) {
   const [tab, setTab] = useState<Tab>(p.initialTab ?? "ai");
+  const box = useRef<HTMLDivElement>(null);
+
+  const close = useRef(p.onClose);
+  useEffect(() => {
+    close.current = p.onClose;
+  });
+
+  // Modal: take focus from the note behind it, and close on Escape wherever focus ended up.
+  useEffect(() => {
+    box.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      close.current();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(43,38,32,0.22)] p-4 backdrop-blur-[2px]" onMouseDown={p.onClose}>
@@ -30,8 +49,9 @@ export function SettingsDialog(p: Props) {
         aria-modal="true"
         aria-label="Settings"
         className="card pop-in flex max-h-[90dvh] w-full max-w-[560px] flex-col overflow-hidden !rounded-3xl !shadow-[var(--shadow-lg)]"
+        ref={box}
+        tabIndex={-1}
         onMouseDown={(e) => e.stopPropagation()}
-        onKeyDown={(e) => e.key === "Escape" && p.onClose()}
       >
         <header className="flex items-center gap-3 px-6 pb-2 pt-5">
           <h2 className="font-serif flex-1 text-[24px] font-semibold">Settings</h2>
@@ -43,6 +63,7 @@ export function SettingsDialog(p: Props) {
           {(
             [
               ["ai", "AI model"],
+              ["agents", "Agents"],
               ["data", "Import & export"],
               ["storage", "Storage"],
             ] as const
@@ -59,6 +80,7 @@ export function SettingsDialog(p: Props) {
         </div>
         <div className="scroll-soft overflow-y-auto px-6 py-5">
           {tab === "ai" && <AITab settings={p.settings} onSave={p.onSave} />}
+          {tab === "agents" && <AgentsTab />}
           {tab === "data" && <DataTab data={p.data} onImport={p.onImport} />}
           {tab === "storage" && (
             <div className="space-y-4">
@@ -279,7 +301,7 @@ function DataTab({ data, onImport }: { data: WorkspaceData; onImport: (d: Worksp
       const parsed = JSON.parse(await file.text());
       if (!Array.isArray(parsed.folders) || !Array.isArray(parsed.notes)) throw new Error("That file isn't a char or jknotes export.");
       const count = await onImport(parsed);
-      setMsg(`Imported ${count} notes.`);
+      setMsg(`Imported ${count} ${count === 1 ? "note" : "notes"}.`);
     } catch (e) {
       setMsg(e instanceof Error ? e.message : "Import failed.");
     } finally {
@@ -321,6 +343,260 @@ function DataTab({ data, onImport }: { data: WorkspaceData; onImport: (d: Worksp
         />
         {msg && <p className="mt-2 text-[13px]">{msg}</p>}
       </div>
+    </div>
+  );
+}
+
+/* ---------- @charlie ---------- */
+
+const AGENT_ORDER: Exclude<AgentId, "custom">[] = ["claude", "codex", "opencode", "hermes"];
+
+function AgentsTab() {
+  const [found, setFound] = useState<DetectedAgents | null>(null);
+  const [draft, setDraft] = useState<AgentConfig | null>(null);
+  const [saved, setSaved] = useState<AgentConfig | null>(null);
+  const [test, setTest] = useState<{ kind: "idle" | "busy" | "ok" | "error"; msg?: string }>({ kind: "idle" });
+  const testRun = useRef<string | null>(null);
+  const [modelList, setModelList] = useState<{ agent: AgentId; ids: string[] } | null>(null);
+  const agentId = draft?.agent;
+
+  // What the chosen agent can run, for the model picker (OpenCode asks its providers, which takes a moment).
+  useEffect(() => {
+    if (!agentId || agentId === "custom") return;
+    let live = true;
+    agentBridge()
+      .models(agentId)
+      .then((ids) => live && setModelList({ agent: agentId, ids }));
+    return () => {
+      live = false;
+    };
+  }, [agentId]);
+
+  useEffect(() => {
+    const bridge = agentBridge();
+    bridge.getConfig().then((c) => {
+      setDraft(c);
+      setSaved(c);
+    });
+    bridge.detect().then(setFound);
+    return bridge.onEvent((e) => {
+      if (e.runId !== testRun.current) return;
+      if (e.type === "done") setTest({ kind: "ok", msg: `Answered: “${e.output.slice(0, 80)}”` });
+      else if (e.type === "error") setTest({ kind: "error", msg: e.message });
+      else if (e.type === "stopped") setTest({ kind: "idle" });
+      if (e.type === "done" || e.type === "error" || e.type === "stopped") testRun.current = null;
+    });
+  }, []);
+
+  // A test in flight is stopped if the tab closes.
+  useEffect(() => () => void (testRun.current && agentBridge().stop(testRun.current)), []);
+
+  if (!draft) return <p className="label">loading…</p>;
+
+  const dirty = JSON.stringify(draft) !== JSON.stringify(saved);
+  const installed = draft.agent === "custom" ? !!draft.custom.trim() : !!found?.[draft.agent]?.path;
+
+  const save = async () => {
+    const next = await agentBridge().setConfig(draft);
+    setDraft(next);
+    setSaved(next);
+    await refreshAgentLabel(next);
+    return next;
+  };
+
+  const runTest = async () => {
+    await save();
+    const id = `test-${Date.now()}`;
+    testRun.current = id;
+    setTest({ kind: "busy" });
+    agentBridge().run(id, "This is a connection test from the char notepad. Reply with exactly the word: ready");
+  };
+
+  return (
+    <div className="space-y-5">
+      <p className="text-[13.5px] leading-relaxed text-[var(--ink-soft)]">
+        <span className="text-[var(--sun)]">
+          <IconTerminal size={13} className="inline -mt-0.5" />
+        </span>{" "}
+        Type <span className="kbd">@charlie</span> in any note, then a task, and press Enter. charlie hands the note (and notes it links to) to the
+        agent below, runs it in the working folder, and writes the answer into the note. Long answers get a note of their own.
+      </p>
+
+      <div>
+        <span className="label mb-2 block">agent</span>
+        <div className="grid grid-cols-2 gap-1.5">
+          {AGENT_ORDER.map((id) => {
+            const a = found?.[id];
+            const on = draft.agent === id;
+            return (
+              <button
+                key={id}
+                className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-left transition-colors ${
+                  on ? "border-transparent bg-[var(--accent)] text-white" : "border-[var(--hairline)] bg-[var(--card)] hover:bg-[var(--hover)]"
+                }`}
+                onClick={() => setDraft({ ...draft, agent: id })}
+              >
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[13px] font-medium">{a?.label ?? id}</span>
+                  <span className={`block truncate font-mono text-[10.5px] ${on ? "text-white/70" : "text-[var(--ink-faint)]"}`}>
+                    {!found ? "looking…" : a?.path ? (a.version ?? "installed") : "not installed"}
+                  </span>
+                </span>
+                {a?.path && <IconCheck size={13} />}
+              </button>
+            );
+          })}
+          <button
+            className={`col-span-2 rounded-xl border px-3 py-2 text-left text-[13px] font-medium transition-colors ${
+              draft.agent === "custom" ? "border-transparent bg-[var(--accent)] text-white" : "border-[var(--hairline)] bg-[var(--card)] hover:bg-[var(--hover)]"
+            }`}
+            onClick={() => setDraft({ ...draft, agent: "custom" })}
+          >
+            Custom command
+          </button>
+        </div>
+        {draft.agent !== "custom" && (
+          <ModelPicker
+            key={draft.agent}
+            value={draft.models[draft.agent] ?? ""}
+            options={modelList?.agent === draft.agent ? modelList.ids : null}
+            listable={draft.agent === "claude" || draft.agent === "opencode"}
+            hint={
+              draft.agent === "opencode"
+                ? "provider/model, as in `opencode models`"
+                : draft.agent === "claude"
+                  ? "an alias (opus, sonnet, haiku, fable) or a full model id"
+                  : "the model name the CLI accepts with --model"
+            }
+            onChange={(model) => setDraft({ ...draft, models: { ...draft.models, [draft.agent]: model } })}
+          />
+        )}
+        {draft.agent === "custom" && (
+          <label className="mt-3 block">
+            <span className="label mb-1.5 block">command</span>
+            <input
+              className="input font-mono !text-[13px]"
+              value={draft.custom}
+              placeholder="my-agent --print {prompt}"
+              spellCheck={false}
+              onChange={(e) => setDraft({ ...draft, custom: e.target.value })}
+            />
+            <span className="mt-1.5 block text-[12px] text-[var(--ink-soft)]">
+              Runs without a shell. The task goes where <span className="font-mono">{"{prompt}"}</span> is, or last if it isn&apos;t there. Whatever it prints
+              becomes the answer.
+            </span>
+          </label>
+        )}
+      </div>
+
+      <div>
+        <span className="label mb-1.5 block">working folder</span>
+        <div className="flex items-center gap-2">
+          <div className="card min-w-0 flex-1 truncate px-3 py-2 font-mono text-[12px] text-[var(--ink-soft)]" title={draft.cwd}>
+            {draft.cwd}
+          </div>
+          <button
+            className="btn btn-sm"
+            onClick={async () => {
+              const dir = await agentBridge().pickFolder();
+              if (dir) setDraft({ ...draft, cwd: dir });
+            }}
+          >
+            <IconFolder size={14} /> Choose…
+          </button>
+        </div>
+        <span className="mt-1.5 block text-[12px] text-[var(--ink-soft)]">Where charlie runs: point it at a project to let it work on that code.</span>
+      </div>
+
+      <div>
+        <span className="label mb-2 block">permissions</span>
+        <div className="space-y-1.5">
+          {(
+            [
+              [false, "Ask first", "Reads and answers. Edits and commands follow the agent's own approval settings, so most are skipped."],
+              [true, "Full access", "Edits files and runs commands in the working folder without asking. Only use this with a folder you trust it with."],
+            ] as const
+          ).map(([full, title, body]) => (
+            <label
+              key={title}
+              className={`flex cursor-pointer gap-2.5 rounded-xl border px-3 py-2.5 ${draft.full === full ? "border-[var(--ink-soft)] bg-[var(--card)]" : "border-[var(--hairline)]"}`}
+            >
+              <input type="radio" className="mt-1" checked={draft.full === full} onChange={() => setDraft({ ...draft, full })} />
+              <span>
+                <span className="block text-[13px] font-medium">{title}</span>
+                <span className="block text-[12px] leading-relaxed text-[var(--ink-soft)]">{body}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+      </div>
+
+      {test.kind !== "idle" && (
+        <p className={`text-[12.5px] ${test.kind === "error" ? "text-[var(--danger)]" : test.kind === "ok" ? "text-[#3f7a3a]" : "text-[var(--ink-soft)]"}`} role="status">
+          {test.kind === "busy" ? "Asking the agent to say “ready”… (agents can take a few seconds to start)" : test.msg}
+        </p>
+      )}
+
+      <div className="hairline-t flex items-center gap-2 pt-4">
+        <button className="btn btn-sm" disabled={!installed || test.kind === "busy"} onClick={runTest}>
+          {test.kind === "busy" ? "Testing…" : "Test"}
+        </button>
+        {test.kind === "busy" && (
+          <button className="btn btn-ghost btn-sm" onClick={() => testRun.current && agentBridge().stop(testRun.current)}>
+            Cancel
+          </button>
+        )}
+        <span className="flex-1" />
+        {!dirty && saved && <span className="label">saved ✓</span>}
+        <button className="btn btn-primary" disabled={!dirty || (draft.agent === "custom" && !draft.custom.trim())} onClick={save}>
+          Save
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ModelPicker(p: { value: string; options: string[] | null; listable: boolean; hint: string; onChange: (model: string) => void }) {
+  const [filter, setFilter] = useState("");
+  const shown = (p.options ?? []).filter((m) => m.toLowerCase().includes(filter.toLowerCase())).slice(0, 200);
+  return (
+    <div className="mt-3">
+      <span className="label mb-1.5 block">default model</span>
+      <input
+        className="input font-mono !text-[13px]"
+        value={p.value}
+        placeholder="agent's own default"
+        spellCheck={false}
+        onChange={(e) => {
+          p.onChange(e.target.value.trim());
+          setFilter(e.target.value.trim());
+        }}
+      />
+      <span className="mt-1.5 block text-[12px] text-[var(--ink-soft)]">Leave empty to use the agent&apos;s own setting. Otherwise {p.hint}.</span>
+      {p.listable && (
+        <div className="scroll-soft mt-2 max-h-36 overflow-y-auto rounded-xl border border-[var(--hairline)] p-1">
+          {p.options === null ? (
+            <p className="label px-2.5 py-1.5">loading models…</p>
+          ) : shown.length === 0 ? (
+            <p className="label px-2.5 py-1.5">no matching models</p>
+          ) : (
+            [{ id: "", label: "agent's own default" }, ...shown.map((m) => ({ id: m, label: m }))].map((m) => (
+              <button
+                key={m.id || "default"}
+                className="row flex w-full items-center justify-between px-2.5 py-1.5 text-left font-mono text-[12.5px]"
+                data-selected={p.value === m.id}
+                onClick={() => {
+                  p.onChange(m.id);
+                  setFilter("");
+                }}
+              >
+                {m.label}
+                {p.value === m.id && <IconCheck size={13} />}
+              </button>
+            ))
+          )}
+        </div>
+      )}
     </div>
   );
 }

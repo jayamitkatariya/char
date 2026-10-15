@@ -159,3 +159,19 @@ export const IconInsert = (p: IconProps) => (
     <path d="M12 5v10M8 11l4 4 4-4M5 19h14" />
   </Svg>
 );
+export const IconTerminal = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="3" y="4" width="18" height="16" rx="2.5" />
+    <path d="m7.5 9.5 3 2.5-3 2.5M12.5 15h4" />
+  </Svg>
+);
+export const IconWand = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="m4 20 11-11M14 4v2M19 9h2M17.5 5.5 19 4M17.5 12.5 19 14M13 6.5l4.5 4.5" />
+  </Svg>
+);
+export const IconRetry = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M4 12a8 8 0 0 1 13.7-5.6L20 8.5M20 4v4.5h-4.5M20 12a8 8 0 0 1-13.7 5.6L4 15.5M4 20v-4.5h4.5" />
+  </Svg>
+);

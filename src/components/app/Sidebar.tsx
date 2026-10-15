@@ -263,8 +263,8 @@ export function Sidebar(props: Props) {
 
   return (
     <aside className="flex h-full w-full flex-col bg-[var(--paper-2)]">
-      {/* pt-11 leaves room for the window's traffic lights above the logo */}
-      <div className="drag flex items-center justify-between px-4 pb-2 pt-11">
+      {/* lights-top leaves room for the window's traffic lights above the logo */}
+      <div className="drag lights-top flex items-center justify-between px-4 pb-2">
         <button className="logo text-[20px] transition-opacity hover:opacity-70" title="Today" onClick={() => onNavigate({ kind: "home" })}>
           {"{char}"}
         </button>

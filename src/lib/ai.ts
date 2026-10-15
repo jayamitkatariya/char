@@ -1,6 +1,7 @@
 "use client";
 
 import Anthropic from "@anthropic-ai/sdk";
+import { allowAI } from "./desktop";
 import type { Folder, Note } from "./types";
 
 /* ---------- settings (bring your own key) ---------- */
@@ -25,7 +26,7 @@ export const PRESETS: { id: string; label: string; provider: Provider; baseUrl: 
     provider: "openai",
     baseUrl: "http://localhost:11434/v1",
     model: "",
-    hint: "Start Ollama with OLLAMA_ORIGINS=* so char can reach it. No key needed.",
+    hint: "Runs models on this Mac. Start Ollama, then Fetch models. No key needed.",
   },
   { id: "custom", label: "Custom (OpenAI-compatible)", provider: "openai", baseUrl: "", model: "" },
 ];
@@ -83,6 +84,7 @@ async function readError(res: Response) {
 }
 
 export async function listModels(s: AISettings): Promise<string[]> {
+  await allowAI(s.baseUrl || "https://api.anthropic.com");
   if (s.provider === "anthropic") {
     const ids: string[] = [];
     for await (const m of anthropicClient(s).models.list()) ids.push(m.id);
@@ -109,6 +111,7 @@ export async function streamChat(
   onText: (delta: string) => void,
   signal: AbortSignal,
 ): Promise<void> {
+  await allowAI(s.baseUrl || "https://api.anthropic.com");
   if (s.provider === "anthropic") {
     const client = anthropicClient(s);
     const officialEndpoint = !s.baseUrl || /api\.anthropic\.com/.test(s.baseUrl);

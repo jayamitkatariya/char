@@ -1,4 +1,4 @@
-import { GITHUB_URL } from "@/lib/site";
+import { DOWNLOAD_URL } from "@/lib/site";
 import { ArrowRight, GitHub } from "./icons";
 
 // "From notes to done." — the o in "notes" is an empty hand-drawn checkbox,
@@ -33,7 +33,7 @@ export default function FinalCta() {
         Start crossing them off.
       </p>
       <div className="mt-9 flex justify-center">
-        <a href={GITHUB_URL} target="_blank" rel="noopener" className="l-cta group">
+        <a href={DOWNLOAD_URL} target="_blank" rel="noopener" className="l-cta group">
           <GitHub className="h-4 w-4" />
           Download for macOS
           <ArrowRight className="h-4 w-4 transition-transform duration-200 group-hover:translate-x-0.5" />
