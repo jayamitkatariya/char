@@ -99,6 +99,9 @@ export const isRunning = (id: string) => runs.get(id)?.status === "running";
 
 export const getRun = (id: string) => runs.get(id);
 
+/** Whether charlie is still working on something that will land in this note. */
+export const hasRunIn = (noteId: string) => [...runs.values()].some((r) => r.noteId === noteId && r.status === "running");
+
 /** Stops runs whose note is gone (deleted, or its folder was): nobody is left to read the answer. */
 export function stopRunsOutside(noteIds: Set<string>) {
   for (const run of runs.values()) if (run.status === "running" && !noteIds.has(run.noteId)) void stopRun(run.id);

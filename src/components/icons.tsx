@@ -62,6 +62,16 @@ export const IconBack = (p: IconProps) => (
     <path d="m15 6-6 6 6 6" />
   </Svg>
 );
+export const IconForward = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="m9 6 6 6-6 6" />
+  </Svg>
+);
+export const IconCollapse = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="m7 4 5 5 5-5M7 20l5-5 5 5" />
+  </Svg>
+);
 export const IconSidebar = (p: IconProps) => (
   <Svg {...p}>
     <rect x="3" y="4" width="18" height="16" rx="3" />

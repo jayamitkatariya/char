@@ -1,11 +1,17 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { Folder, Note } from "@/lib/types";
 import {
   IconChevron,
+  IconClock,
+  IconCollapse,
+  IconCopy,
   IconFolder,
+  IconLink,
   IconMore,
+  IconMove,
   IconNote,
   IconPin,
   IconPlus,
@@ -14,6 +20,7 @@ import {
   IconSidebar,
   IconSparkle,
   IconSun,
+  IconTrash,
 } from "../icons";
 
 export type View = { kind: "home" } | { kind: "all" } | { kind: "pinned" } | { kind: "folder"; id: string } | { kind: "note"; id: string };
@@ -32,6 +39,11 @@ type Props = {
   onDeleteFolder: (id: string) => void;
   onMoveNote: (noteId: string, folderId: string) => void;
   onMoveFolder: (folderId: string, parentId: string | null) => void;
+  onTogglePin: (noteId: string) => void;
+  onDuplicate: (noteId: string) => void;
+  onCopyLink: (noteId: string) => void;
+  onPickFolder: (noteId: string) => void;
+  onDeleteNote: (noteId: string) => void;
   onSearch: () => void;
   onAsk: () => void;
   onSettings: () => void;
@@ -39,21 +51,38 @@ type Props = {
 };
 
 const EXPANDED_KEY = "char:expanded";
+const RECENT_KEY = "char:recent-closed";
 const DRAG_NOTE = "application/x-char-note";
 const DRAG_FOLDER = "application/x-char-folder";
+const RECENT = 5;
+
+type OpenMenu = { kind: "note" | "folder"; id: string; at: { x: number; y: number } };
+
+const readSet = (key: string) => {
+  try {
+    return new Set<string>(JSON.parse(localStorage.getItem(key) ?? "[]"));
+  } catch {
+    return new Set<string>();
+  }
+};
+
+// Right-click opens the menu at the cursor; the ⋯ button opens it just below itself.
+const menuAt = (e: React.MouseEvent) => {
+  e.preventDefault(); // also keeps Electron's native menu away
+  e.stopPropagation();
+  if (e.type === "contextmenu") return { x: e.clientX, y: e.clientY };
+  const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+  return { x: r.left, y: r.bottom + 4 };
+};
 
 export function Sidebar(props: Props) {
   const { folders, notes, view, activeFolderId, onNavigate } = props;
-  const [expanded, setExpanded] = useState<Set<string>>(() => {
-    try {
-      return new Set(JSON.parse(localStorage.getItem(EXPANDED_KEY) ?? "[]"));
-    } catch {
-      return new Set();
-    }
-  });
+  const [expanded, setExpanded] = useState<Set<string>>(() => readSet(EXPANDED_KEY));
+  const [recentOpen, setRecentOpen] = useState(() => !readSet(RECENT_KEY).has("recent"));
   const [renaming, setRenaming] = useState<string | null>(null);
-  const [menu, setMenu] = useState<string | null>(null);
+  const [menu, setMenu] = useState<OpenMenu | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
+  const [dragging, setDragging] = useState(false);
 
   const persist = (next: Set<string>) => {
     setExpanded(next);
@@ -66,6 +95,12 @@ export function Sidebar(props: Props) {
     if (open ?? !next.has(id)) next.add(id);
     else next.delete(id);
     persist(next);
+  };
+  const toggleRecent = () => {
+    setRecentOpen(!recentOpen);
+    try {
+      localStorage.setItem(RECENT_KEY, JSON.stringify(recentOpen ? ["recent"] : []));
+    } catch {}
   };
 
   // Opening a note reveals its folder and the folders above it.
@@ -101,6 +136,21 @@ export function Sidebar(props: Props) {
     return m;
   }, [notes]);
 
+  // A folder's count includes the notes in its subfolders.
+  const totals = useMemo(() => {
+    const m = new Map<string, number>();
+    const count = (id: string, seen: Set<string>): number => {
+      if (m.has(id)) return m.get(id)!;
+      if (seen.has(id)) return 0;
+      seen.add(id);
+      const n = (notesIn.get(id)?.length ?? 0) + (childFolders.get(id) ?? []).reduce((s, k) => s + count(k.id, seen), 0);
+      m.set(id, n);
+      return n;
+    };
+    for (const f of folders) count(f.id, new Set());
+    return m;
+  }, [folders, notesIn, childFolders]);
+
   const isDescendant = (id: string, maybeAncestor: string) => {
     let cur: string | null | undefined = id;
     while (cur) {
@@ -109,6 +159,19 @@ export function Sidebar(props: Props) {
     }
     return false;
   };
+
+  const dragProps = (type: string, id: string) => ({
+    draggable: true,
+    onDragStart: (e: React.DragEvent) => {
+      e.dataTransfer.setData(type, id);
+      e.dataTransfer.effectAllowed = "move";
+      setDragging(true);
+    },
+    onDragEnd: () => {
+      setDragging(false);
+      setDropTarget(null);
+    },
+  });
 
   const dropProps = (folderId: string | null) => ({
     onDragOver: (e: React.DragEvent) => {
@@ -121,6 +184,7 @@ export function Sidebar(props: Props) {
     onDrop: (e: React.DragEvent) => {
       e.preventDefault();
       setDropTarget(null);
+      setDragging(false);
       const noteId = e.dataTransfer.getData(DRAG_NOTE);
       const draggedFolder = e.dataTransfer.getData(DRAG_FOLDER);
       if (noteId && folderId) {
@@ -139,29 +203,43 @@ export function Sidebar(props: Props) {
   };
 
   const pinned = notes.filter((n) => n.pinned).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const recent = useMemo(
+    () => notes.filter((n) => !n.pinned).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, RECENT),
+    [notes],
+  );
 
-  const renderNote = (n: Note, depth: number) => {
+  const renderNote = (n: Note, indent: number, keyPrefix = "") => {
     const selected = view.kind === "note" && view.id === n.id;
+    const menuOpen = menu?.kind === "note" && menu.id === n.id;
     return (
-      <li key={n.id}>
-        <button
-          draggable
-          onDragStart={(e) => {
-            e.dataTransfer.setData(DRAG_NOTE, n.id);
-            e.dataTransfer.effectAllowed = "move";
-          }}
-          className="row flex w-full items-center gap-2 py-[5px] pr-2 text-left text-[13.5px]"
-          style={{ paddingLeft: 8 + depth * 14 + 18 }}
-          data-selected={selected}
-          onClick={() => onNavigate({ kind: "note", id: n.id })}
+      <li key={keyPrefix + n.id}>
+        <div
+          {...dragProps(DRAG_NOTE, n.id)}
+          className="row group flex items-center pr-1"
+          data-selected={selected || menuOpen}
+          onContextMenu={(e) => setMenu({ kind: "note", id: n.id, at: menuAt(e) })}
         >
-          <span className="shrink-0 text-[var(--ink-faint)]">
-            <IconNote size={14} />
+          <button
+            className="flex min-w-0 flex-1 items-center gap-2 py-[5px] text-left text-[13.5px]"
+            style={{ paddingLeft: indent }}
+            onClick={() => onNavigate({ kind: "note", id: n.id })}
+          >
+            <span className="shrink-0 text-[var(--ink-faint)]">
+              <IconNote size={14} />
+            </span>
+            <span className={`truncate ${selected ? "font-medium text-[var(--ink)]" : "text-[var(--ink-soft)]"}`}>{n.title.trim() || "Untitled"}</span>
+          </button>
+          <span className={`shrink-0 ${menuOpen ? "flex" : "hidden group-hover:flex"}`}>
+            <button
+              className="icon-btn !h-6 !w-6"
+              title="More"
+              aria-label="Note actions"
+              onClick={(e) => setMenu(menuOpen ? null : { kind: "note", id: n.id, at: menuAt(e) })}
+            >
+              <IconMore size={13} />
+            </button>
           </span>
-          <span className={`truncate ${selected ? "font-medium text-[var(--ink)]" : "text-[var(--ink-soft)]"}`}>
-            {n.title.trim() || "Untitled"}
-          </span>
-        </button>
+        </div>
       </li>
     );
   };
@@ -171,18 +249,19 @@ export function Sidebar(props: Props) {
     const kids = childFolders.get(f.id) ?? [];
     const own = notesIn.get(f.id) ?? [];
     const selected = view.kind === "folder" && view.id === f.id;
+    const menuOpen = menu?.kind === "folder" && menu.id === f.id;
+    const total = totals.get(f.id) ?? 0;
     return (
       <li key={f.id}>
         <div
           {...dropProps(f.id)}
-          className={`row group relative flex items-center gap-1 pr-1 ${dropTarget === f.id ? "!bg-[var(--highlight)]" : ""}`}
+          {...(renaming === f.id ? {} : dragProps(DRAG_FOLDER, f.id))}
+          className={`row group relative flex items-center gap-1 pr-1 ${
+            dropTarget === f.id ? "!bg-[var(--highlight)]" : dragging ? "outline-dashed outline-1 -outline-offset-1 outline-[var(--hairline)]" : ""
+          }`}
           style={{ paddingLeft: 4 + depth * 14 }}
-          data-selected={selected}
-          draggable={renaming !== f.id}
-          onDragStart={(e) => {
-            e.dataTransfer.setData(DRAG_FOLDER, f.id);
-            e.dataTransfer.effectAllowed = "move";
-          }}
+          data-selected={selected || menuOpen}
+          onContextMenu={(e) => renaming !== f.id && setMenu({ kind: "folder", id: f.id, at: menuAt(e) })}
         >
           <button className="icon-btn !h-6 !w-6 text-[var(--ink-faint)]" onClick={() => toggle(f.id)} aria-label={open ? "Collapse" : "Expand"}>
             <IconChevron size={12} open={open} />
@@ -205,39 +284,27 @@ export function Sidebar(props: Props) {
                 <IconFolder size={15} />
               </span>
               <span className={`truncate ${selected ? "font-medium" : ""}`}>{f.name}</span>
-              <span className="ml-auto pr-1 font-mono text-[10.5px] text-[var(--ink-faint)] group-hover:hidden">{own.length || ""}</span>
+              <span className={`ml-auto pr-1 font-mono text-[10.5px] text-[var(--ink-faint)] ${menuOpen ? "hidden" : "group-hover:hidden"}`}>{total || ""}</span>
             </button>
           )}
-          <div className="hidden items-center group-hover:flex">
+          <div className={`items-center ${menuOpen ? "flex" : "hidden group-hover:flex"}`}>
             <button className="icon-btn !h-6 !w-6" title="New note here" onClick={() => props.onNewNote(f.id)}>
               <IconPlus size={13} />
             </button>
-            <button className="icon-btn !h-6 !w-6" title="More" onClick={() => setMenu(menu === f.id ? null : f.id)}>
+            <button
+              className="icon-btn !h-6 !w-6"
+              title="More"
+              aria-label="Folder actions"
+              onClick={(e) => setMenu(menuOpen ? null : { kind: "folder", id: f.id, at: menuAt(e) })}
+            >
               <IconMore size={13} />
             </button>
           </div>
-          {menu === f.id && (
-            <Menu onClose={() => setMenu(null)}>
-              <MenuItem onClick={() => newFolder(f.id)}>New subfolder</MenuItem>
-              <MenuItem onClick={() => setRenaming(f.id)}>Rename</MenuItem>
-              {f.parentId && <MenuItem onClick={() => props.onMoveFolder(f.id, null)}>Move to top level</MenuItem>}
-              <MenuItem
-                danger
-                onClick={() => {
-                  const count = own.length;
-                  if (window.confirm(`Delete “${f.name}”${count ? `, its subfolders and ${count} note${count === 1 ? "" : "s"}` : " and its subfolders"}?`))
-                    props.onDeleteFolder(f.id);
-                }}
-              >
-                Delete folder
-              </MenuItem>
-            </Menu>
-          )}
         </div>
         {open && (
           <ul>
             {kids.map((k) => renderFolder(k, depth + 1))}
-            {own.map((n) => renderNote(n, depth))}
+            {own.map((n) => renderNote(n, 8 + depth * 14 + 18))}
             {!kids.length && !own.length && (
               <li className="py-1 text-[12.5px] italic text-[var(--ink-faint)]" style={{ paddingLeft: 8 + depth * 14 + 18 }}>
                 Empty
@@ -248,6 +315,64 @@ export function Sidebar(props: Props) {
       </li>
     );
   };
+
+  const noteMenu = (n: Note) => (
+    <>
+      <MenuItem icon={<IconNote size={14} />} onClick={() => onNavigate({ kind: "note", id: n.id })}>
+        Open
+      </MenuItem>
+      <MenuItem icon={<IconPin size={14} />} onClick={() => props.onTogglePin(n.id)}>
+        {n.pinned ? "Unpin" : "Pin"}
+      </MenuItem>
+      <MenuItem icon={<IconCopy size={14} />} onClick={() => props.onDuplicate(n.id)}>
+        Duplicate
+      </MenuItem>
+      <MenuItem icon={<IconLink size={14} />} onClick={() => props.onCopyLink(n.id)}>
+        Copy link
+      </MenuItem>
+      <MenuItem icon={<IconMove size={14} />} onClick={() => props.onPickFolder(n.id)}>
+        Move to…
+      </MenuItem>
+      <MenuSep />
+      <MenuItem
+        danger
+        icon={<IconTrash size={14} />}
+        onClick={() => window.confirm(`Delete “${n.title.trim() || "Untitled"}”?`) && props.onDeleteNote(n.id)}
+      >
+        Delete note
+      </MenuItem>
+    </>
+  );
+
+  const folderMenu = (f: Folder) => {
+    const count = totals.get(f.id) ?? 0;
+    return (
+      <>
+        <MenuItem icon={<IconPlus size={14} />} onClick={() => props.onNewNote(f.id)}>
+          New note here
+        </MenuItem>
+        <MenuItem icon={<IconFolder size={14} />} onClick={() => newFolder(f.id)}>
+          New subfolder
+        </MenuItem>
+        <MenuItem onClick={() => setRenaming(f.id)}>Rename</MenuItem>
+        {f.parentId && <MenuItem onClick={() => props.onMoveFolder(f.id, null)}>Move to top level</MenuItem>}
+        <MenuSep />
+        <MenuItem
+          danger
+          icon={<IconTrash size={14} />}
+          onClick={() => {
+            if (window.confirm(`Delete “${f.name}”${count ? `, its subfolders and ${count} note${count === 1 ? "" : "s"}` : " and its subfolders"}?`))
+              props.onDeleteFolder(f.id);
+          }}
+        >
+          Delete folder
+        </MenuItem>
+      </>
+    );
+  };
+
+  const openMenuNote = menu?.kind === "note" ? notes.find((n) => n.id === menu.id) : undefined;
+  const openMenuFolder = menu?.kind === "folder" ? folders.find((f) => f.id === menu.id) : undefined;
 
   const nav = (label: string, v: View, icon: React.ReactNode, extra?: React.ReactNode) => (
     <button
@@ -301,25 +426,30 @@ export function Sidebar(props: Props) {
 
         {pinned.length > 0 && (
           <>
-            <div className="label mt-5 flex items-center gap-1.5 px-2 pb-1">
+            <button
+              className="label mt-5 flex w-full items-center gap-1.5 rounded-md px-2 pb-1 text-left hover:text-[var(--ink)]"
+              title="Show all pinned notes"
+              onClick={() => onNavigate({ kind: "pinned" })}
+            >
               <IconPin size={11} /> pinned
-            </div>
-            <ul>
-              {pinned.map((n) => (
-                <li key={n.id}>
-                  <button
-                    className="row flex w-full items-center gap-2 px-2 py-[5px] text-left text-[13.5px]"
-                    data-selected={view.kind === "note" && view.id === n.id}
-                    onClick={() => onNavigate({ kind: "note", id: n.id })}
-                  >
-                    <span className="text-[var(--ink-faint)]">
-                      <IconNote size={14} />
-                    </span>
-                    <span className="truncate text-[var(--ink-soft)]">{n.title.trim() || "Untitled"}</span>
-                  </button>
-                </li>
-              ))}
-            </ul>
+            </button>
+            <ul>{pinned.map((n) => renderNote(n, 8, "p-"))}</ul>
+          </>
+        )}
+
+        {recent.length > 0 && (
+          <>
+            <button
+              className="label mt-5 flex w-full items-center gap-1.5 rounded-md px-2 pb-1 text-left hover:text-[var(--ink)]"
+              aria-expanded={recentOpen}
+              onClick={toggleRecent}
+            >
+              <IconClock size={11} /> recent
+              <span className="ml-auto">
+                <IconChevron size={10} open={recentOpen} />
+              </span>
+            </button>
+            {recentOpen && <ul>{recent.map((n) => renderNote(n, 8, "r-"))}</ul>}
           </>
         )}
 
@@ -328,13 +458,19 @@ export function Sidebar(props: Props) {
           className={`label mt-5 flex items-center justify-between rounded-md px-2 pb-1 ${dropTarget === "__root" ? "bg-[var(--highlight)]" : ""}`}
         >
           <span>folders</span>
-          <button className="icon-btn !h-5 !w-5" title="New folder" onClick={() => newFolder(null)}>
-            <IconPlus size={12} />
-          </button>
+          <span className="flex items-center gap-0.5">
+            {expanded.size > 0 && (
+              <button className="icon-btn !h-5 !w-5" title="Collapse all" aria-label="Collapse all folders" onClick={() => persist(new Set())}>
+                <IconCollapse size={12} />
+              </button>
+            )}
+            <button className="icon-btn !h-5 !w-5" title="New folder" onClick={() => newFolder(null)}>
+              <IconPlus size={12} />
+            </button>
+          </span>
         </div>
         <ul>{(childFolders.get(null) ?? []).map((f) => renderFolder(f, 0))}</ul>
         {folders.length === 0 && <p className="px-2 py-2 text-[12.5px] text-[var(--ink-faint)]">No folders yet.</p>}
-        <p className="label mt-4 px-2 leading-relaxed opacity-70">drag notes onto folders to move them</p>
       </nav>
 
       <div className="hairline-t flex items-center gap-2 px-3 py-3">
@@ -346,6 +482,12 @@ export function Sidebar(props: Props) {
           <IconSettings size={15} />
         </button>
       </div>
+
+      {menu && (openMenuNote || openMenuFolder) && (
+        <Menu at={menu.at} onClose={() => setMenu(null)}>
+          {openMenuNote ? noteMenu(openMenuNote) : folderMenu(openMenuFolder!)}
+        </Menu>
+      )}
     </aside>
   );
 }
@@ -374,7 +516,21 @@ function RenameInput({ initial, onDone }: { initial: string; onDone: (name: stri
   );
 }
 
-export function Menu({ children, onClose, align = "right" }: { children: React.ReactNode; onClose: () => void; align?: "left" | "right" }) {
+/**
+ * A dropdown menu. Anchored below its parent by default; with `at`, it floats at that point
+ * (a right-click or a button's corner) and stays inside the window.
+ */
+export function Menu({
+  children,
+  onClose,
+  align = "right",
+  at,
+}: {
+  children: React.ReactNode;
+  onClose: () => void;
+  align?: "left" | "right";
+  at?: { x: number; y: number };
+}) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const onDown = (e: MouseEvent) => {
@@ -383,15 +539,31 @@ export function Menu({ children, onClose, align = "right" }: { children: React.R
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     document.addEventListener("mousedown", onDown);
     document.addEventListener("keydown", onKey);
+    window.addEventListener("blur", onClose);
+    if (at) window.addEventListener("resize", onClose);
     return () => {
       document.removeEventListener("mousedown", onDown);
       document.removeEventListener("keydown", onKey);
+      window.removeEventListener("blur", onClose);
+      window.removeEventListener("resize", onClose);
     };
-  }, [onClose]);
-  return (
+  }, [onClose, at]);
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!at || !el) return;
+    const { width, height } = el.getBoundingClientRect();
+    el.style.left = `${Math.max(8, Math.min(at.x, window.innerWidth - width - 8))}px`;
+    el.style.top = `${Math.max(8, Math.min(at.y, window.innerHeight - height - 8))}px`;
+  }, [at]);
+
+  const menu = (
     <div
       ref={ref}
-      className={`card pop-in absolute top-full z-40 mt-1 min-w-[180px] p-1 ${align === "right" ? "right-0" : "left-0"}`}
+      role="menu"
+      className={`card pop-in z-[70] min-w-[180px] p-1 ${at ? "fixed" : `absolute top-full mt-1 ${align === "right" ? "right-0" : "left-0"}`}`}
+      style={at ? { left: at.x, top: at.y } : undefined}
+      onContextMenu={(e) => e.preventDefault()}
       onClick={(e) => {
         e.stopPropagation();
         // Picking an item closes the menu.
@@ -401,15 +573,31 @@ export function Menu({ children, onClose, align = "right" }: { children: React.R
       {children}
     </div>
   );
+  // Floating menus live on <body> so a scrolling or transformed parent can't clip them.
+  return at ? createPortal(menu, document.body) : menu;
 }
 
-export function MenuItem({ children, onClick, danger }: { children: React.ReactNode; onClick: () => void; danger?: boolean }) {
+export function MenuItem({
+  children,
+  onClick,
+  danger,
+  icon,
+}: {
+  children: React.ReactNode;
+  onClick: () => void;
+  danger?: boolean;
+  icon?: React.ReactNode;
+}) {
   return (
     <button
-      className={`row block w-full px-3 py-1.5 text-left text-[13px] ${danger ? "text-[var(--danger)]" : ""}`}
+      role="menuitem"
+      className={`row flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] ${danger ? "text-[var(--danger)]" : ""}`}
       onClick={onClick}
     >
-      {children}
+      {icon && <span className={`shrink-0 ${danger ? "" : "text-[var(--ink-soft)]"}`}>{icon}</span>}
+      <span className="min-w-0 flex-1 truncate">{children}</span>
     </button>
   );
 }
+
+export const MenuSep = () => <div className="hairline-t my-1" role="separator" />;

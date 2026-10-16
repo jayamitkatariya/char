@@ -7,9 +7,10 @@ import type { EditorChange } from "@/components/app/Editor";
 import { setLinkState } from "@/components/app/linkStore";
 import { SettingsDialog } from "@/components/app/SettingsDialog";
 import { Sidebar, type View } from "@/components/app/Sidebar";
+import { MovePicker } from "@/components/app/MovePicker";
 import { HomeView, ListView, NoteView, type SaveState } from "@/components/app/Views";
 import { isConfigured, loadAISettings, saveAISettings, type AISettings } from "@/lib/ai";
-import { isLongOutput, refreshAgentLabel, setRunFinisher, stopRunsOutside, type Run } from "@/lib/charlie";
+import { hasRunIn, isLongOutput, refreshAgentLabel, setRunFinisher, stopRunsOutside, type Run } from "@/lib/charlie";
 import { isDesktop, onMenu, onOpenLink, onUpdate, userName, type AgentEvent } from "@/lib/desktop";
 import { GITHUB_URL } from "@/lib/site";
 import type { Folder, Note } from "@/lib/types";
@@ -91,6 +92,7 @@ function Workspace() {
   const [sidebarOpen, setSidebarOpen] = useState(() => !isMobile); // desktop: docked; mobile: drawer
   const [chatOpen, setChatOpen] = useState(false);
   const [palette, setPalette] = useState(false);
+  const [moving, setMoving] = useState<string | null>(null); // the note the "Move to…" picker is for
   const [settingsTab, setSettingsTab] = useState<null | "ai" | "agents" | "data" | "storage">(null);
   const [ai, setAI] = useState<AISettings | null>(() => loadAISettings(uid));
   const [pendingQuestion, setPendingQuestion] = useState<string | null>(null);
@@ -99,6 +101,8 @@ function Workspace() {
 
   const pending = useRef(new Map<string, { patch: Partial<Note>; timer: ReturnType<typeof setTimeout>; since: number }>());
   const insertRef = useRef<((markdown: string) => void) | null>(null);
+  const openNote = useRef<string | null>(null); // the note on screen, for the empty-note cleanup
+  const discardIfEmpty = useRef<(id: string) => void>(() => {});
   const [canInsert, setCanInsert] = useState(false);
 
   /* ---------- boot ---------- */
@@ -222,6 +226,7 @@ function Workspace() {
         ws.updateNote(id, patch);
       }
       pending.current.clear();
+      if (openNote.current) discardIfEmpty.current(openNote.current);
     };
     window.addEventListener("pagehide", flushAll);
     // Electron silently cancels the close if beforeunload is prevented, so save instead of asking.
@@ -259,9 +264,62 @@ function Workspace() {
     }
     const folderId = notes.find((n) => n.id === id)?.folderId;
     await ws.deleteNote(id);
-    navigate(folderId && folderById.has(folderId) ? { kind: "folder", id: folderId } : { kind: "home" });
+    // Deleting from the sidebar leaves you where you are, unless you were in that note.
+    if (view.kind === "note" && view.id === id) navigate(folderId && folderById.has(folderId) ? { kind: "folder", id: folderId } : { kind: "home" });
     setToast("Note deleted");
   };
+
+  const togglePin = (id: string) => {
+    const note = notes.find((n) => n.id === id);
+    if (!note) return;
+    saveNow(id, { pinned: !note.pinned });
+    setToast(note.pinned ? "Unpinned" : "Pinned");
+  };
+
+  const moveNote = (id: string, folderId: string) => {
+    if (notes.find((n) => n.id === id)?.folderId === folderId) return;
+    saveNow(id, { folderId });
+    setToast(`Moved to ${folderPath(folderId)}`);
+  };
+
+  const duplicateNote = async (id: string) => {
+    await settle(id);
+    const src = ws.getNote(id);
+    if (!src) return;
+    const copy = await ws.createNote(src.folderId, {
+      title: `${src.title.trim() || "Untitled"} copy`,
+      content: src.content,
+      blocks: src.blocks,
+      links: src.links,
+    });
+    navigate({ kind: "note", id: copy.id });
+  };
+
+  const copyLink = async (id: string) => {
+    // char:// links open this note in the app from anywhere (Messages, Mail, a terminal).
+    await navigator.clipboard.writeText(`char://note/${id}`);
+    setToast("Link copied");
+  };
+
+  /* ---------- empty notes don't pile up ---------- */
+
+  // A note left with no title and no text (a stray ⌘N) is dropped once you move on.
+  useEffect(() => {
+    discardIfEmpty.current = (id) => {
+      const n = ws.getNote(id);
+      if (!n || pending.current.has(id) || n.title.trim() || n.content.trim() || n.pinned || hasRunIn(id)) return;
+      if (ws.notes.some((o) => o.links?.includes(id))) return;
+      ws.deleteNote(id).catch(() => {});
+    };
+  });
+  useEffect(() => {
+    const left = openNote.current;
+    openNote.current = view.kind === "note" ? view.id : null;
+    if (!left || left === openNote.current) return;
+    // Typing still in the debounce is written first, so a note that just got its first words stays.
+    void settle(left).then(() => discardIfEmpty.current(left));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view]);
 
   // Created with a placeholder name; the sidebar or folder page opens it for renaming.
   const createFolder = async (parentId: string | null, open = true) => {
@@ -400,6 +458,12 @@ function Workspace() {
       } else if (k === "n" && !e.shiftKey) {
         e.preventDefault();
         createNote();
+      } else if (k === "h" && e.shiftKey) {
+        e.preventDefault();
+        navigate({ kind: "home" });
+      } else if (k === "p" && e.shiftKey && currentNote) {
+        e.preventDefault();
+        togglePin(currentNote.id);
       } else if (k === "\\") {
         e.preventDefault();
         setSidebarOpen((s) => !s);
@@ -452,11 +516,9 @@ function Workspace() {
         onNavigate={navigate}
         onTitle={(title) => queueSave(currentNote.id, { title })}
         onEditorChange={(c: EditorChange) => queueSave(currentNote.id, c)}
-        onTogglePin={() => saveNow(currentNote.id, { pinned: !currentNote.pinned })}
-        onMove={(folderId) => {
-          saveNow(currentNote.id, { folderId });
-          setToast(`Moved to ${folderPath(folderId)}`);
-        }}
+        onTogglePin={() => togglePin(currentNote.id)}
+        onPickFolder={() => setMoving(currentNote.id)}
+        onCopyLink={() => copyLink(currentNote.id)}
         onDelete={() => deleteNote(currentNote.id)}
         onCreateNote={(title) => createNote(currentNote.folderId, title, false)}
         registerInsert={registerInsert}
@@ -534,12 +596,13 @@ function Workspace() {
           onNewFolder={(parentId) => createFolder(parentId, false)}
           onRenameFolder={(id, name) => ws.renameFolder(id, name)}
           onDeleteFolder={deleteFolder}
-          onMoveNote={(noteId, folderId) => {
-            if (notes.find((n) => n.id === noteId)?.folderId === folderId) return;
-            saveNow(noteId, { folderId });
-            setToast(`Moved to ${folderPath(folderId)}`);
-          }}
+          onMoveNote={moveNote}
           onMoveFolder={(id, parentId) => ws.moveFolder(id, parentId)}
+          onTogglePin={togglePin}
+          onDuplicate={duplicateNote}
+          onCopyLink={copyLink}
+          onPickFolder={setMoving}
+          onDeleteNote={deleteNote}
           onSearch={() => setPalette(true)}
           onAsk={() => ask()}
           onSettings={() => setSettingsTab("ai")}
@@ -585,7 +648,25 @@ function Workspace() {
           onAsk={(q) => ask(q)}
           onSettings={() => setSettingsTab("ai")}
           onAgentSettings={() => setSettingsTab("agents")}
-          noteTitle={currentNote ? currentNote.title : null}
+          current={currentNote ? { title: currentNote.title, pinned: currentNote.pinned } : null}
+          onTogglePin={() => currentNote && togglePin(currentNote.id)}
+          onMoveNote={() => currentNote && setMoving(currentNote.id)}
+        />
+      )}
+
+      {moving && notes.some((n) => n.id === moving) && (
+        <MovePicker
+          noteTitle={notes.find((n) => n.id === moving)!.title}
+          folders={folders}
+          currentFolderId={notes.find((n) => n.id === moving)!.folderId}
+          folderPath={folderPath}
+          onPick={(folderId) => moveNote(moving, folderId)}
+          onCreate={async (name) => {
+            const f = await ws.createFolder(name, null);
+            saveNow(moving, { folderId: f.id });
+            setToast(`Moved to ${name}`);
+          }}
+          onClose={() => setMoving(null)}
         />
       )}
 

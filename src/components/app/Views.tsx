@@ -1,14 +1,17 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { Folder, Note } from "@/lib/types";
 import {
+  IconBack,
   IconDownload,
   IconFolder,
+  IconForward,
   IconLink,
   IconMenu,
   IconMore,
+  IconMove,
   IconPin,
   IconPlus,
   IconSidebar,
@@ -19,7 +22,7 @@ import {
 } from "../icons";
 import type { EditorChange } from "./Editor";
 import { plainText } from "./Markdown";
-import { Menu, MenuItem, type View } from "./Sidebar";
+import { Menu, MenuItem, MenuSep, type View } from "./Sidebar";
 
 // BlockNote touches the DOM on import; load it only in the browser.
 const Editor = dynamic(() => import("./Editor"), {
@@ -30,6 +33,31 @@ const Editor = dynamic(() => import("./Editor"), {
 export type SaveState = "saved" | "saving" | "error";
 
 /* ---------- shared bits ---------- */
+
+// The app moves between notes with pushState, so the window's own history is the back stack.
+// Chromium's Navigation API says whether there is anywhere to go.
+type HistoryNav = EventTarget & { canGoBack: boolean; canGoForward: boolean };
+const historyNav = () => (window as unknown as { navigation?: HistoryNav }).navigation;
+const onHistory = (cb: () => void) => {
+  const nav = historyNav();
+  nav?.addEventListener("currententrychange", cb);
+  return () => nav?.removeEventListener("currententrychange", cb);
+};
+
+function HistoryButtons() {
+  const back = useSyncExternalStore(onHistory, () => historyNav()?.canGoBack ?? true, () => false);
+  const forward = useSyncExternalStore(onHistory, () => historyNav()?.canGoForward ?? true, () => false);
+  return (
+    <div className="hidden items-center sm:flex">
+      <button className="icon-btn disabled:pointer-events-none disabled:opacity-30" disabled={!back} onClick={() => history.back()} title="Back (⌘[)" aria-label="Back">
+        <IconBack size={16} />
+      </button>
+      <button className="icon-btn disabled:pointer-events-none disabled:opacity-30" disabled={!forward} onClick={() => history.forward()} title="Forward (⌘])" aria-label="Forward">
+        <IconForward size={16} />
+      </button>
+    </div>
+  );
+}
 
 export function TopBar({
   sidebarHidden,
@@ -60,6 +88,7 @@ export function TopBar({
           <IconSidebar size={16} />
         </span>
       </button>
+      <HistoryButtons />
       <div className="flex min-w-0 flex-1 items-center gap-1 text-[13px] text-[var(--ink-soft)]">{children}</div>
       {actions}
       <button
@@ -143,7 +172,8 @@ type NoteViewProps = {
   onTitle: (title: string) => void;
   onEditorChange: (c: EditorChange) => void;
   onTogglePin: () => void;
-  onMove: (folderId: string) => void;
+  onPickFolder: () => void;
+  onCopyLink: () => void;
   onDelete: () => void;
   onCreateNote: (title: string) => Note | Promise<Note>;
   registerInsert: (fn: ((markdown: string) => void) | null) => void;
@@ -172,11 +202,6 @@ export function NoteView(p: NoteViewProps) {
   const backlinks = useMemo(() => p.notes.filter((n) => n.id !== note.id && n.links?.includes(note.id)), [p.notes, note.id]);
   const words = useMemo(() => plainText(note.content).split(/\s+/).filter(Boolean).length, [note.content]);
 
-  const copyLink = async () => {
-    // char:// links open this note in the app from anywhere (Messages, Mail, a terminal).
-    await navigator.clipboard.writeText(`char://note/${note.id}`);
-    p.onToast("Link copied");
-  };
   const exportMd = () => {
     const blob = new Blob([`# ${note.title || "Untitled"}\n\n${note.content}`], { type: "text/markdown" });
     const a = document.createElement("a");
@@ -203,7 +228,7 @@ export function NoteView(p: NoteViewProps) {
             >
               <IconWand size={15} />
             </button>
-            <button className="icon-btn" onClick={p.onTogglePin} title={note.pinned ? "Unpin" : "Pin"} aria-pressed={note.pinned}>
+            <button className="icon-btn" onClick={p.onTogglePin} title={`${note.pinned ? "Unpin" : "Pin"} (⌘⇧P)`} aria-pressed={note.pinned}>
               <IconPin size={15} />
             </button>
             <div className="relative">
@@ -212,33 +237,18 @@ export function NoteView(p: NoteViewProps) {
               </button>
               {menu && (
                 <Menu onClose={() => setMenu(false)}>
-                  <MenuItem onClick={copyLink}>
-                    <span className="flex items-center gap-2">
-                      <IconLink size={14} /> Copy link
-                    </span>
+                  <MenuItem icon={<IconLink size={14} />} onClick={p.onCopyLink}>
+                    Copy link
                   </MenuItem>
-                  <MenuItem onClick={exportMd}>
-                    <span className="flex items-center gap-2">
-                      <IconDownload size={14} /> Export markdown
-                    </span>
+                  <MenuItem icon={<IconDownload size={14} />} onClick={exportMd}>
+                    Export markdown
                   </MenuItem>
-                  <div className="label px-3 pb-1 pt-2">move to</div>
-                  <div className="scroll-soft max-h-48 overflow-y-auto">
-                    {p.folders
-                      .filter((f) => f.id !== note.folderId)
-                      .map((f) => (
-                        <MenuItem key={f.id} onClick={() => p.onMove(f.id)}>
-                          <span className="flex items-center gap-2">
-                            <IconFolder size={14} /> <span className="truncate">{p.folderPath(f.id)}</span>
-                          </span>
-                        </MenuItem>
-                      ))}
-                  </div>
-                  <div className="hairline-t my-1" />
-                  <MenuItem danger onClick={() => window.confirm("Delete this note?") && p.onDelete()}>
-                    <span className="flex items-center gap-2">
-                      <IconTrash size={14} /> Delete note
-                    </span>
+                  <MenuItem icon={<IconMove size={14} />} onClick={p.onPickFolder}>
+                    Move to…
+                  </MenuItem>
+                  <MenuSep />
+                  <MenuItem danger icon={<IconTrash size={14} />} onClick={() => window.confirm("Delete this note?") && p.onDelete()}>
+                    Delete note
                   </MenuItem>
                 </Menu>
               )}
