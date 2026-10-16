@@ -1,6 +1,8 @@
 // char for macOS: a window around the static Next.js export in out/, a JSON file for the notes,
 // and @charlie, which hands tasks to a coding agent installed on this Mac (see ./agents.js).
 
+const crypto = require("node:crypto");
+const netSocket = require("node:net");
 const { app, BrowserWindow, Menu, dialog, ipcMain, nativeTheme, net, protocol, screen, session, shell } = require("electron");
 const { execFile, execFileSync } = require("node:child_process");
 const fs = require("node:fs");
@@ -8,6 +10,8 @@ const os = require("node:os");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const agents = require("./agents");
+// Shipped next to cli.js in Resources (outside app.asar), where the char command loads it too.
+const { socketPath } = require(app.isPackaged ? path.join(process.resourcesPath, "cliSocket.js") : "./cliSocket");
 
 // `npm run app:dev` points this at `next dev`; packaged builds serve out/ over app://char.
 const DEV_URL = process.env.CHAR_DEV_URL;
@@ -130,6 +134,152 @@ ipcMain.on("workspace:reveal", (e) => {
   if (fs.existsSync(dataFile())) shell.showItemInFolder(dataFile());
   else shell.openPath(path.dirname(dataFile()));
 });
+
+/* ---------- the `char` command (electron/cli.js) ---------- */
+
+// The command reads notes straight from workspace.json, but every change goes through here to the
+// open notepad, so the app stays the only writer and the UI updates live. One JSON request per
+// line on a Unix socket only this user can open.
+let cliReady = null; // webContents id of the page that's listening
+const cliWaiters = [];
+const cliPending = new Map();
+
+ipcMain.on("cli:ready", (e) => {
+  if (!fromApp(e)) return;
+  cliReady = e.sender.id;
+  cliWaiters.splice(0).forEach((f) => f());
+});
+ipcMain.on("cli:response", (e, res) => {
+  if (!fromApp(e) || !res) return;
+  cliPending.get(res.id)?.(res);
+  cliPending.delete(res.id);
+});
+
+function pageReady(ms) {
+  if (win && cliReady === win.webContents.id) return Promise.resolve();
+  if (!win) createWindow();
+  const waiting = new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error("char's window didn't come up")), ms);
+    cliWaiters.push(() => {
+      clearTimeout(t);
+      resolve();
+    });
+  });
+  // An already-loaded page answers this at once, so readiness can't get stuck.
+  if (win && !win.webContents.isLoading()) win.webContents.send("cli:request", { id: "", cmd: "__hello", args: {} });
+  return waiting;
+}
+
+async function cliRequest(req) {
+  if (req.cmd === "ping") return { version: app.getVersion() };
+  await pageReady(25000);
+  if (req.cmd === "open") {
+    if (win.isMinimized()) win.restore();
+    win.show();
+    app.focus({ steal: true });
+  }
+  const id = crypto.randomUUID();
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => {
+      cliPending.delete(id);
+      reject(new Error("char didn't answer in time"));
+    }, 30000);
+    cliPending.set(id, (res) => {
+      clearTimeout(t);
+      if (res.ok) resolve(res.result);
+      else reject(new Error(res.error || "failed"));
+    });
+    win.webContents.send("cli:request", { id, cmd: req.cmd, args: req.args ?? {} });
+  });
+}
+
+function startCliServer() {
+  const sock = socketPath(app.getPath("userData"));
+  fs.mkdirSync(path.dirname(sock), { recursive: true });
+  try {
+    fs.unlinkSync(sock); // left over from a crash; the single-instance lock means it isn't live
+  } catch {}
+  const server = netSocket.createServer((conn) => {
+    let buf = "";
+    conn.setEncoding("utf8");
+    conn.on("error", () => {});
+    conn.on("data", (chunk) => {
+      buf += chunk;
+      if (buf.length > 8 * 1024 * 1024) return conn.destroy(); // a note, not a flood
+      for (let i = buf.indexOf("\n"); i >= 0; i = buf.indexOf("\n")) {
+        const line = buf.slice(0, i);
+        buf = buf.slice(i + 1);
+        let req;
+        try {
+          req = JSON.parse(line);
+        } catch {
+          conn.write(JSON.stringify({ ok: false, error: "bad request" }) + "\n");
+          continue;
+        }
+        cliRequest(req).then(
+          (result) => conn.writable && conn.write(JSON.stringify({ id: req.id, ok: true, result }) + "\n"),
+          (e) => conn.writable && conn.write(JSON.stringify({ id: req.id, ok: false, error: e.message }) + "\n"),
+        );
+      }
+    });
+  });
+  server.on("error", (e) => console.error("char cli socket:", e.message));
+  server.listen(sock, () => {
+    try {
+      fs.chmodSync(sock, 0o600);
+    } catch {}
+  });
+  app.on("will-quit", () => {
+    server.close();
+    try {
+      fs.unlinkSync(sock);
+    } catch {}
+  });
+}
+
+// Settings → Agents → "Install the char command": a tiny script on the PATH that runs cli.js on
+// char's own runtime (no Node needed).
+const cliScript = () => (app.isPackaged ? path.join(process.resourcesPath, "cli.js") : path.join(__dirname, "cli.js"));
+const CLI_DIRS = ["/opt/homebrew/bin", "/usr/local/bin", path.join(os.homedir(), ".local", "bin")];
+
+function cliInstalledAt() {
+  for (const dir of CLI_DIRS) {
+    const file = path.join(dir, "char");
+    try {
+      if (fs.readFileSync(file, "utf8").includes("char command line")) return file;
+    } catch {}
+  }
+  return null;
+}
+
+ipcMain.handle("cli:status", guard(() => ({ installedAt: cliInstalledAt() })));
+ipcMain.handle(
+  "cli:install",
+  guard(() => {
+    const body = `#!/bin/sh
+# char command line, installed by char (Settings → Agents). Runs on char's own runtime.
+CHAR_BIN=${JSON.stringify(process.execPath)}
+CHAR_CLI=${JSON.stringify(cliScript())}
+if [ ! -x "$CHAR_BIN" ]; then echo "char: can't find $CHAR_BIN. Open char → Settings → Agents and install the command again." >&2; exit 1; fi
+ELECTRON_RUN_AS_NODE=1 exec "$CHAR_BIN" "$CHAR_CLI" "$@"
+`;
+    const existing = cliInstalledAt();
+    const dirs = existing ? [path.dirname(existing), ...CLI_DIRS] : CLI_DIRS;
+    for (const dir of dirs) {
+      const file = path.join(dir, "char");
+      try {
+        // Never overwrite some other program called char.
+        if (fs.existsSync(file) && !fs.readFileSync(file, "utf8").includes("char command line")) continue;
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(file, body, { mode: 0o755 });
+        fs.chmodSync(file, 0o755);
+        const onPath = (process.env.PATH ?? "").split(":").includes(dir) || dir !== CLI_DIRS[2];
+        return { installedAt: file, onPath };
+      } catch {}
+    }
+    throw new Error("Couldn't write the command anywhere on your PATH");
+  }),
+);
 
 /* ---------- @charlie ---------- */
 
@@ -447,7 +597,15 @@ function createWindow() {
   });
   const w = win;
   w.once("ready-to-show", () => w.show());
+  // A reload or a closed window has nobody listening for the char command until the page says so.
+  const wcId = w.webContents.id;
+  w.webContents.on("did-start-navigation", (e, ...rest) => {
+    // Only a real page load; moving between notes (pushState) keeps the page listening.
+    const d = e && typeof e === "object" && "isSameDocument" in e ? e : { isSameDocument: rest[1], isMainFrame: rest[2] };
+    if (!d.isSameDocument && d.isMainFrame !== false && cliReady === wcId) cliReady = null;
+  });
   w.on("closed", () => {
+    if (cliReady === wcId) cliReady = null;
     if (win === w) win = null;
   });
 
@@ -616,6 +774,7 @@ if (!app.requestSingleInstanceLock()) {
     allowCrossOriginAI();
     if (!DEV_URL) serveApp();
     createWindow();
+    startCliServer();
     if (app.isPackaged) {
       setTimeout(() => checkForUpdates(), 8000);
       setInterval(() => checkForUpdates(), 6 * 60 * 60 * 1000);

@@ -14,7 +14,7 @@ import { HomeView, ListView, NoteView, TasksView, TrashView, type SaveState } fr
 import { allTasks } from "@/lib/tasks";
 import { isConfigured, loadAISettings, saveAISettings, type AISettings } from "@/lib/ai";
 import { hasRunIn, isLongOutput, refreshAgentLabel, setRunFinisher, stopRunsOutside, type Run } from "@/lib/charlie";
-import { isDesktop, onMenu, onOpenLink, onUpdate, userName, type AgentEvent } from "@/lib/desktop";
+import { cliBridge, isDesktop, onMenu, onOpenLink, onUpdate, userName, type AgentEvent } from "@/lib/desktop";
 import { GITHUB_URL } from "@/lib/site";
 import { setThemeMode, startTheme } from "@/lib/theme";
 import type { Folder, Note } from "@/lib/types";
@@ -102,7 +102,9 @@ function Workspace() {
   const [palette, setPalette] = useState(false);
   const [finding, setFinding] = useState(false);
   const [shortcuts, setShortcuts] = useState(false);
-  const [moving, setMoving] = useState<string | null>(null); // the note the "Move to…" picker is for
+  const [moving, setMoving] = useState<string | null>(null);
+  // Bumped when the char command renames the open note, so its title field picks that up.
+  const [rev, setRev] = useState(0); // the note the "Move to…" picker is for
   const [settingsTab, setSettingsTab] = useState<null | "ai" | "agents" | "data" | "storage">(null);
   const [ai, setAI] = useState<AISettings | null>(() => loadAISettings(uid));
   const [pendingQuestion, setPendingQuestion] = useState<string | null>(null);
@@ -521,6 +523,121 @@ function Workspace() {
   // Deleting a note (or its folder) stops charlie's runs in it.
   useEffect(() => stopRunsOutside(new Set(notes.map((n) => n.id))), [notes]);
 
+  /* ---------- the char command (electron/cli.js) ---------- */
+
+  // Changes from the command line, applied like changes from the UI. Note and folder ids are
+  // resolved by the command; anything missing here is an error it reports.
+  const cliAction = useRef<(cmd: string, a: Record<string, unknown>) => Promise<unknown>>(async () => null);
+  useEffect(() => {
+    const str = (v: unknown) => (typeof v === "string" ? v : "");
+    const live = (id: string) => {
+      const n = ws.getNote(id);
+      if (!n) throw new Error(`No note with id ${id}`);
+      return n;
+    };
+    const isOpen = (id: string) => view.kind === "note" && view.id === id;
+    const writeBody = async (id: string, markdown: string, mode: "replace" | "append" | "prepend") => {
+      const [{ openEditor }, { writeMarkdown, writeMarkdownToStoredNote }] = await Promise.all([
+        import("@/components/app/editorRegistry"),
+        import("@/components/app/offscreen"),
+      ]);
+      await settle(id);
+      const editor = openEditor(id);
+      if (editor) {
+        writeMarkdown(editor, markdown, mode); // its change event queues the save…
+        await settle(id); // …which is written before answering
+        return;
+      }
+      await ws.updateNote(id, writeMarkdownToStoredNote(live(id), markdown, mode));
+    };
+    cliAction.current = async (cmd, a) => {
+      switch (cmd) {
+        case "create": {
+          const parent = str(a.parentId) ? live(str(a.parentId)) : null;
+          const folderId = parent ? parent.folderId : targetFolder(str(a.folderId) || undefined);
+          await ensureFolder(folderId);
+          const note = await ws.createNote(folderId, { title: str(a.title), parentId: parent?.id ?? null, icon: str(a.icon) || undefined });
+          if (str(a.markdown)) await writeBody(note.id, str(a.markdown), "replace");
+          return { id: note.id };
+        }
+        case "write": {
+          live(str(a.id));
+          const mode = a.mode === "replace" || a.mode === "prepend" ? a.mode : "append";
+          await writeBody(str(a.id), str(a.markdown), mode);
+          return { id: a.id };
+        }
+        case "rename":
+          live(str(a.id));
+          await settle(str(a.id));
+          await ws.updateNote(str(a.id), { title: str(a.title) });
+          if (isOpen(str(a.id))) setRev((r) => r + 1);
+          return { id: a.id };
+        case "move":
+          live(str(a.id));
+          if (str(a.parentId)) {
+            live(str(a.parentId));
+            if (str(a.parentId) === a.id || subpagesOf(notes, str(a.id)).has(str(a.parentId))) throw new Error("A page can't go inside itself");
+            await ws.moveNote(str(a.id), { parentId: str(a.parentId) });
+          } else {
+            if (!folderById.has(str(a.folderId))) throw new Error(`No folder with id ${str(a.folderId)}`);
+            await ws.moveNote(str(a.id), { folderId: str(a.folderId) });
+          }
+          return { id: a.id };
+        case "pin":
+          live(str(a.id));
+          await settle(str(a.id));
+          await ws.updateNote(str(a.id), { pinned: !!a.pinned });
+          return { id: a.id };
+        case "icon":
+          live(str(a.id));
+          await settle(str(a.id));
+          await ws.updateNote(str(a.id), { icon: str(a.icon) });
+          return { id: a.id };
+        case "trash": {
+          live(str(a.id));
+          const inside = subpagesOf(notes, str(a.id)).size;
+          await deleteNote(str(a.id));
+          return { id: a.id, inside };
+        }
+        case "restore":
+          if (!ws.trash.some((n) => n.id === a.id)) throw new Error(`No note with id ${str(a.id)} in the Trash`);
+          await ws.restoreNote(str(a.id));
+          return { id: a.id };
+        case "mkdir": {
+          if (str(a.parentId) && !folderById.has(str(a.parentId))) throw new Error(`No folder with id ${str(a.parentId)}`);
+          const f = await ws.createFolder(str(a.name) || "New folder", str(a.parentId) || null);
+          return { id: f.id };
+        }
+        case "task":
+          live(str(a.id));
+          await toggleTask(str(a.id), str(a.blockId), !!a.checked);
+          return { id: a.id };
+        case "open":
+          if (str(a.id)) {
+            live(str(a.id));
+            navigate({ kind: "note", id: str(a.id) });
+          } else if (str(a.folderId)) navigate({ kind: "folder", id: str(a.folderId) });
+          return { ok: true };
+        default:
+          throw new Error(`Unknown command: ${cmd}`);
+      }
+    };
+  });
+  useEffect(() => {
+    // Only once the notes are loaded, so a command that started the app doesn't race the load.
+    const cli = cliBridge();
+    if (!cli || !ws.loaded) return;
+    const off = cli.onRequest(({ id, cmd, args }) => {
+      if (cmd === "__hello") return cli.ready();
+      cliAction
+        .current(cmd, args)
+        .then((result) => cli.respond({ id, ok: true, result }))
+        .catch((e: Error) => cli.respond({ id, ok: false, error: e.message }));
+    });
+    cli.ready();
+    return off;
+  }, [ws.loaded]);
+
   /* ---------- the menu bar and char:// links ---------- */
 
   const menuAction = useRef<(action: string) => void>(() => {});
@@ -610,7 +727,7 @@ function Workspace() {
   } else if (view.kind === "note" && currentNote) {
     main = (
       <NoteView
-        key={currentNote.id}
+        key={`${currentNote.id}:${rev}`}
         note={currentNote}
         notes={notes}
         folders={folders}

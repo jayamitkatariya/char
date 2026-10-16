@@ -25,6 +25,7 @@ export type AgentEvent = { runId: string } & (
   | { type: "stopped" }
 );
 export type ThemeMode = "system" | "light" | "dark";
+export type CliRequest = { id: string; cmd: string; args: Record<string, unknown> };
 export type MenuAction = "settings" | "new-note" | "new-folder" | "search" | "ask" | "toggle-sidebar" | "home" | "shortcuts" | `theme-${ThemeMode}`;
 
 // Exposed by electron/preload.js. The notepad only runs inside the Mac app; a plain browser has no bridge.
@@ -42,6 +43,13 @@ type Bridge = {
   onOpen: (cb: (target: { kind: "note" | "folder"; id: string }) => void) => () => void;
   onUpdate: (cb: (update: { version: string; url: string }) => void) => () => void;
   allowAI: (baseUrl: string) => Promise<void>;
+  cli?: {
+    onRequest: (cb: (req: CliRequest) => void) => () => void;
+    ready: () => void;
+    respond: (res: { id: string; ok: boolean; result?: unknown; error?: string }) => void;
+    status: () => Promise<{ installedAt: string | null }>;
+    install: () => Promise<{ installedAt: string; onPath: boolean }>;
+  };
   agent: {
     detect: () => Promise<DetectedAgents>;
     status: (agentId: BuiltInAgent) => Promise<AgentStatus | null>;
@@ -98,3 +106,6 @@ export const allowAI = async (baseUrl: string) => {
 };
 
 export const agentBridge = () => need().agent;
+
+/** The `char` command line: requests to answer, and installing the command. */
+export const cliBridge = () => bridge()?.cli ?? null;

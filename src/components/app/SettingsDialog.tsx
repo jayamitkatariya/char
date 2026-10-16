@@ -6,6 +6,7 @@ import { elapsed, refreshAgentLabel } from "@/lib/charlie";
 import { CONNECTORS, setupPrompt } from "@/lib/connectors";
 import {
   agentBridge,
+  cliBridge,
   dataPath,
   revealData,
   type AgentConfig,
@@ -731,7 +732,78 @@ function AgentsTab() {
       </div>
 
       {installed && <Connectors agent={draft.agent} label={builtIn ? (found?.[builtIn]?.label ?? builtIn) : "your command"} canSetUp={!dirty} />}
+
+      <CommandLine />
     </div>
+  );
+}
+
+const AGENT_HINT = "You can read and edit my notes with the `char` command. Run `char help` to see how.";
+
+/** The `char` command: any agent (or you) can read and change notes from a terminal. */
+function CommandLine() {
+  const [status, setStatus] = useState<{ installedAt: string | null; onPath?: boolean } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    cliBridge()
+      ?.status()
+      .then(setStatus)
+      .catch(() => setStatus({ installedAt: null }));
+  }, []);
+  const install = async () => {
+    setError(null);
+    try {
+      setStatus(await cliBridge()!.install());
+    } catch (e) {
+      setError(e instanceof Error ? e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, "") : String(e));
+    }
+  };
+  return (
+    <section className="hairline-t space-y-3 pt-5">
+      <h3 className="text-[14px] font-semibold">Command line</h3>
+      <p className="text-[13.5px] leading-relaxed text-[var(--ink-soft)]">
+        The <span className="kbd">char</span> command lets any agent (Claude Code, Codex, scripts) or you read, search and edit notes from a terminal:
+        list, show, search, tasks, new, append, move, check off to-dos and more. Changes go through char, so this window updates as they happen.
+      </p>
+      <div className="card space-y-1 px-3 py-2 font-mono text-[12px] text-[var(--ink-soft)]">
+        <div>char search roadmap</div>
+        <div>char new &quot;Standup&quot; --folder Work &quot;- [ ] ship the fix&quot;</div>
+        <div>char append &quot;Weekly sync&quot; --stdin &lt; notes.md</div>
+        <div>char tasks --json</div>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <button className="btn btn-sm" onClick={install}>
+          {status?.installedAt ? "Reinstall" : "Install the char command"}
+        </button>
+        <button
+          className="btn btn-ghost btn-sm"
+          onClick={async () => {
+            await navigator.clipboard.writeText(AGENT_HINT);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1500);
+          }}
+          title={AGENT_HINT}
+        >
+          {copied ? "Copied ✓" : "Copy a note for your agent"}
+        </button>
+      </div>
+      {status?.installedAt && (
+        <p className="text-[12.5px] text-[var(--ink-soft)]">
+          Installed at <span className="font-mono">{status.installedAt}</span>
+          {status.onPath === false && (
+            <>
+              . Add <span className="font-mono">{status.installedAt.replace(/\/char$/, "")}</span> to your PATH to use it from any terminal.
+            </>
+          )}
+        </p>
+      )}
+      {error && (
+        <p className="text-[12.5px] text-[var(--danger)]" role="alert">
+          {error}
+        </p>
+      )}
+    </section>
   );
 }
 

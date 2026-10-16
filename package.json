@@ -99,6 +99,16 @@
         "width": 560,
         "height": 380
       }
-    }
+    },
+    "extraResources": [
+      {
+        "from": "electron/cli.js",
+        "to": "cli.js"
+      },
+      {
+        "from": "electron/cliSocket.js",
+        "to": "cliSocket.js"
+      }
+    ]
   }
 }

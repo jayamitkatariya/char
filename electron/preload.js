@@ -31,6 +31,15 @@ contextBridge.exposeInMainWorld("char", {
     return listen("char:open", cb);
   },
   allowAI: (baseUrl) => ipcRenderer.invoke("ai:allow", baseUrl),
+
+  // The `char` command: requests from the main process, answered by the notepad.
+  cli: {
+    onRequest: (cb) => listen("cli:request", cb),
+    ready: () => ipcRenderer.send("cli:ready"),
+    respond: (res) => ipcRenderer.send("cli:response", res),
+    status: () => ipcRenderer.invoke("cli:status"),
+    install: () => ipcRenderer.invoke("cli:install"),
+  },
   onUpdate: (cb) => listen("char:update", cb),
 
   agent: {
