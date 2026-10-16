@@ -2,6 +2,7 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { setThemeMode, useTheme } from "@/lib/theme";
 import type { Folder, Note } from "@/lib/types";
 import {
   IconChevron,
@@ -10,6 +11,8 @@ import {
   IconCopy,
   IconFolder,
   IconLink,
+  IconMonitor,
+  IconMoon,
   IconMore,
   IconMove,
   IconNote,
@@ -23,7 +26,13 @@ import {
   IconTrash,
 } from "../icons";
 
-export type View = { kind: "home" } | { kind: "all" } | { kind: "pinned" } | { kind: "folder"; id: string } | { kind: "note"; id: string };
+export type View =
+  | { kind: "home" }
+  | { kind: "all" }
+  | { kind: "pinned" }
+  | { kind: "trash" }
+  | { kind: "folder"; id: string }
+  | { kind: "note"; id: string };
 
 type Props = {
   folders: Folder[];
@@ -44,6 +53,9 @@ type Props = {
   onCopyLink: (noteId: string) => void;
   onPickFolder: (noteId: string) => void;
   onDeleteNote: (noteId: string) => void;
+  onNewSubpage: (parentId: string) => void;
+  onNestNote: (noteId: string, parentId: string) => void;
+  trashCount: number;
   onSearch: () => void;
   onAsk: () => void;
   onSettings: () => void;
@@ -103,20 +115,27 @@ export function Sidebar(props: Props) {
     } catch {}
   };
 
-  // Opening a note reveals its folder and the folders above it.
+  // Opening a note reveals its folder, the folders above it, and the pages it sits inside.
   const parentOf = useMemo(() => new Map(folders.map((f) => [f.id, f.parentId])), [folders]);
+  const noteById = useMemo(() => new Map(notes.map((n) => [n.id, n])), [notes]);
+  const openNoteId = view.kind === "note" ? view.id : null;
   useEffect(() => {
     if (!activeFolderId) return;
     const chain: string[] = [];
     let cur: string | null | undefined = activeFolderId;
-    while (cur) {
+    while (cur && chain.length < 64) {
       chain.push(cur);
       cur = parentOf.get(cur);
+    }
+    let page = openNoteId ? noteById.get(openNoteId)?.parentId : null;
+    while (page && noteById.has(page) && chain.length < 128) {
+      chain.push(page);
+      page = noteById.get(page)?.parentId;
     }
     // eslint-disable-next-line react-hooks/set-state-in-effect -- follows navigation that can come from anywhere (links, ⌘K, chat)
     if (chain.some((id) => !expanded.has(id))) persist(new Set([...expanded, ...chain]));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeFolderId, parentOf]);
+  }, [activeFolderId, parentOf, openNoteId, noteById]);
 
   const childFolders = useMemo(() => {
     const m = new Map<string | null, Folder[]>();
@@ -128,13 +147,34 @@ export function Sidebar(props: Props) {
     return m;
   }, [folders, parentOf]);
 
-  const notesIn = useMemo(() => {
-    const m = new Map<string, Note[]>();
-    for (const n of notes) m.set(n.folderId, [...(m.get(n.folderId) ?? []), n]);
-    // Newest first, but stable while typing (createdAt, not updatedAt).
-    for (const list of m.values()) list.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  // Pages directly in each folder (newest first, stable while typing), and each page's subpages
+  // (oldest first, the order they were added in).
+  const { notesIn, subpages } = useMemo(() => {
+    const top = new Map<string, Note[]>();
+    const kids = new Map<string, Note[]>();
+    for (const n of notes) {
+      if (n.parentId && noteById.has(n.parentId)) kids.set(n.parentId, [...(kids.get(n.parentId) ?? []), n]);
+      else top.set(n.folderId, [...(top.get(n.folderId) ?? []), n]);
+    }
+    for (const list of top.values()) list.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    for (const list of kids.values()) list.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    return { notesIn: top, subpages: kids };
+  }, [notes, noteById]);
+
+  const allIn = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const n of notes) m.set(n.folderId, (m.get(n.folderId) ?? 0) + 1);
     return m;
   }, [notes]);
+
+  const isUnder = (id: string, ancestor: string) => {
+    let cur = noteById.get(id)?.parentId;
+    for (let i = 0; cur && i < 128; i++) {
+      if (cur === ancestor) return true;
+      cur = noteById.get(cur)?.parentId;
+    }
+    return false;
+  };
 
   // A folder's count includes the notes in its subfolders.
   const totals = useMemo(() => {
@@ -143,13 +183,13 @@ export function Sidebar(props: Props) {
       if (m.has(id)) return m.get(id)!;
       if (seen.has(id)) return 0;
       seen.add(id);
-      const n = (notesIn.get(id)?.length ?? 0) + (childFolders.get(id) ?? []).reduce((s, k) => s + count(k.id, seen), 0);
+      const n = (allIn.get(id) ?? 0) + (childFolders.get(id) ?? []).reduce((s, k) => s + count(k.id, seen), 0);
       m.set(id, n);
       return n;
     };
     for (const f of folders) count(f.id, new Set());
     return m;
-  }, [folders, notesIn, childFolders]);
+  }, [folders, allIn, childFolders]);
 
   const isDescendant = (id: string, maybeAncestor: string) => {
     let cur: string | null | undefined = id;
@@ -208,28 +248,75 @@ export function Sidebar(props: Props) {
     [notes],
   );
 
-  const renderNote = (n: Note, indent: number, keyPrefix = "") => {
+  // Dropping a note on a page puts it inside that page.
+  const noteDrop = (target: Note) => ({
+    onDragOver: (e: React.DragEvent) => {
+      if (!e.dataTransfer.types.includes(DRAG_NOTE)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = "move";
+      setDropTarget(`n:${target.id}`);
+    },
+    onDragLeave: () => setDropTarget((t) => (t === `n:${target.id}` ? null : t)),
+    onDrop: (e: React.DragEvent) => {
+      const noteId = e.dataTransfer.getData(DRAG_NOTE);
+      if (!noteId) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setDropTarget(null);
+      setDragging(false);
+      if (noteId === target.id || isUnder(target.id, noteId) || noteById.get(noteId)?.parentId === target.id) return;
+      props.onNestNote(noteId, target.id);
+      toggle(target.id, true);
+    },
+  });
+
+  /** A note row. In the folder tree (`nested`), a page with subpages can be opened to show them. */
+  const renderNote = (n: Note, indent: number, keyPrefix = "", nested = false): React.ReactNode => {
     const selected = view.kind === "note" && view.id === n.id;
     const menuOpen = menu?.kind === "note" && menu.id === n.id;
+    const kids = nested ? (subpages.get(n.id) ?? []) : [];
+    const open = kids.length > 0 && expanded.has(n.id);
     return (
       <li key={keyPrefix + n.id}>
         <div
           {...dragProps(DRAG_NOTE, n.id)}
-          className="row group flex items-center pr-1"
+          {...noteDrop(n)}
+          className={`row group flex items-center pr-1 ${dropTarget === `n:${n.id}` ? "!bg-[var(--highlight)]" : ""}`}
           data-selected={selected || menuOpen}
           onContextMenu={(e) => setMenu({ kind: "note", id: n.id, at: menuAt(e) })}
         >
-          <button
-            className="flex min-w-0 flex-1 items-center gap-2 py-[5px] text-left text-[13.5px]"
-            style={{ paddingLeft: indent }}
-            onClick={() => onNavigate({ kind: "note", id: n.id })}
-          >
-            <span className="shrink-0 text-[var(--ink-faint)]">
-              <IconNote size={14} />
-            </span>
-            <span className={`truncate ${selected ? "font-medium text-[var(--ink)]" : "text-[var(--ink-soft)]"}`}>{n.title.trim() || "Untitled"}</span>
-          </button>
-          <span className={`shrink-0 ${menuOpen ? "flex" : "hidden group-hover:flex"}`}>
+          <div className="flex min-w-0 flex-1 items-center gap-2" style={{ paddingLeft: indent }}>
+            {kids.length > 0 ? (
+              // The page icon turns into a chevron on hover, like Notion.
+              <button
+                className="group/tw relative flex h-[14px] w-[14px] shrink-0 items-center justify-center text-[var(--ink-faint)] hover:text-[var(--ink)]"
+                onClick={() => toggle(n.id)}
+                aria-label={open ? "Hide subpages" : "Show subpages"}
+                aria-expanded={open}
+              >
+                <span className="group-hover:hidden">
+                  <IconNote size={14} />
+                </span>
+                <span className="hidden group-hover:inline">
+                  <IconChevron size={12} open={open} />
+                </span>
+              </button>
+            ) : (
+              <span className="shrink-0 text-[var(--ink-faint)]">
+                <IconNote size={14} />
+              </span>
+            )}
+            <button className="min-w-0 flex-1 truncate py-[5px] text-left text-[13.5px]" onClick={() => onNavigate({ kind: "note", id: n.id })}>
+              <span className={selected ? "font-medium text-[var(--ink)]" : "text-[var(--ink-soft)]"}>{n.title.trim() || "Untitled"}</span>
+            </button>
+          </div>
+          <span className={`shrink-0 items-center ${menuOpen ? "flex" : "hidden group-hover:flex"}`}>
+            {nested && (
+              <button className="icon-btn !h-6 !w-6" title="Add a page inside" aria-label="Add subpage" onClick={() => props.onNewSubpage(n.id)}>
+                <IconPlus size={13} />
+              </button>
+            )}
             <button
               className="icon-btn !h-6 !w-6"
               title="More"
@@ -240,6 +327,7 @@ export function Sidebar(props: Props) {
             </button>
           </span>
         </div>
+        {open && <ul>{kids.map((k) => renderNote(k, indent + 14, keyPrefix, true))}</ul>}
       </li>
     );
   };
@@ -304,7 +392,7 @@ export function Sidebar(props: Props) {
         {open && (
           <ul>
             {kids.map((k) => renderFolder(k, depth + 1))}
-            {own.map((n) => renderNote(n, 8 + depth * 14 + 18))}
+            {own.map((n) => renderNote(n, 8 + depth * 14 + 18, "", true))}
             {!kids.length && !own.length && (
               <li className="py-1 text-[12.5px] italic text-[var(--ink-faint)]" style={{ paddingLeft: 8 + depth * 14 + 18 }}>
                 Empty
@@ -320,6 +408,9 @@ export function Sidebar(props: Props) {
     <>
       <MenuItem icon={<IconNote size={14} />} onClick={() => onNavigate({ kind: "note", id: n.id })}>
         Open
+      </MenuItem>
+      <MenuItem icon={<IconPlus size={14} />} onClick={() => props.onNewSubpage(n.id)}>
+        Add subpage
       </MenuItem>
       <MenuItem icon={<IconPin size={14} />} onClick={() => props.onTogglePin(n.id)}>
         {n.pinned ? "Unpin" : "Pin"}
@@ -337,9 +428,9 @@ export function Sidebar(props: Props) {
       <MenuItem
         danger
         icon={<IconTrash size={14} />}
-        onClick={() => window.confirm(`Delete “${n.title.trim() || "Untitled"}”?`) && props.onDeleteNote(n.id)}
+        onClick={() => props.onDeleteNote(n.id)}
       >
-        Delete note
+        Move to Trash
       </MenuItem>
     </>
   );
@@ -361,7 +452,7 @@ export function Sidebar(props: Props) {
           danger
           icon={<IconTrash size={14} />}
           onClick={() => {
-            if (window.confirm(`Delete “${f.name}”${count ? `, its subfolders and ${count} note${count === 1 ? "" : "s"}` : " and its subfolders"}?`))
+            if (window.confirm(`Delete “${f.name}”${count ? ` and its subfolders? Its ${count} note${count === 1 ? "" : "s"} will go to the Trash.` : " and its subfolders?"}`))
               props.onDeleteFolder(f.id);
           }}
         >
@@ -471,14 +562,24 @@ export function Sidebar(props: Props) {
         </div>
         <ul>{(childFolders.get(null) ?? []).map((f) => renderFolder(f, 0))}</ul>
         {folders.length === 0 && <p className="px-2 py-2 text-[12.5px] text-[var(--ink-faint)]">No folders yet.</p>}
+
+        <div className="mt-4">
+          {nav(
+            "Trash",
+            { kind: "trash" },
+            <IconTrash size={15} />,
+            props.trashCount ? <span className="font-mono text-[10.5px] text-[var(--ink-faint)]">{props.trashCount}</span> : undefined,
+          )}
+        </div>
       </nav>
 
       <div className="hairline-t flex items-center gap-2 px-3 py-3">
-        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[var(--accent)] font-mono text-[12px] font-bold uppercase text-white">
+        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[var(--accent)] font-mono text-[12px] font-bold uppercase text-[var(--on-accent)]">
           {(props.username ?? "?").slice(0, 1)}
         </span>
         <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{props.username}</span>
-        <button className="icon-btn" title="Settings" onClick={props.onSettings}>
+        <ThemeButton />
+        <button className="icon-btn" title="Settings (⌘,)" aria-label="Settings" onClick={props.onSettings}>
           <IconSettings size={15} />
         </button>
       </div>
@@ -489,6 +590,22 @@ export function Sidebar(props: Props) {
         </Menu>
       )}
     </aside>
+  );
+}
+
+// One click flips light and dark (leaving Match System); the full choice is in Settings → Appearance.
+function ThemeButton() {
+  const { mode, resolved } = useTheme();
+  const next = resolved === "dark" ? "light" : "dark";
+  return (
+    <button
+      className="icon-btn"
+      title={`${next === "dark" ? "Dark" : "Light"} mode${mode === "system" ? " (now matching macOS)" : ""}`}
+      aria-label={next === "dark" ? "Switch to dark mode" : "Switch to light mode"}
+      onClick={() => setThemeMode(next)}
+    >
+      {mode === "system" ? <IconMonitor size={15} /> : resolved === "dark" ? <IconMoon size={15} /> : <IconSun size={15} />}
+    </button>
   );
 }
 

@@ -12,6 +12,7 @@ import {
   IconMenu,
   IconMore,
   IconMove,
+  IconNote,
   IconPin,
   IconPlus,
   IconSidebar,
@@ -106,20 +107,24 @@ export function TopBar({
   );
 }
 
-export function Crumbs({ chain, onNavigate, tail }: { chain: Folder[]; onNavigate: (v: View) => void; tail?: string }) {
+export function Crumbs({ chain, pages = [], onNavigate, tail }: { chain: Folder[]; pages?: Note[]; onNavigate: (v: View) => void; tail?: string }) {
+  const steps = [
+    ...chain.map((f) => ({ id: f.id, label: f.name, view: { kind: "folder", id: f.id } as View })),
+    ...pages.map((n) => ({ id: n.id, label: n.title.trim() || "Untitled", view: { kind: "note", id: n.id } as View })),
+  ];
   return (
     <nav className="flex min-w-0 items-center gap-1" aria-label="Breadcrumb">
-      {chain.map((f, i) => (
-        <span key={f.id} className="flex min-w-0 items-center gap-1">
+      {steps.map((st, i) => (
+        <span key={st.id} className="flex min-w-0 shrink items-center gap-1">
           {i > 0 && <span className="text-[var(--ink-faint)]">/</span>}
-          <button className="row truncate px-1.5 py-0.5 hover:text-[var(--ink)]" onClick={() => onNavigate({ kind: "folder", id: f.id })}>
-            {f.name}
+          <button className="row max-w-[180px] truncate px-1.5 py-0.5 hover:text-[var(--ink)]" onClick={() => onNavigate(st.view)}>
+            {st.label}
           </button>
         </span>
       ))}
       {tail !== undefined && (
         <>
-          {chain.length > 0 && <span className="text-[var(--ink-faint)]">/</span>}
+          {steps.length > 0 && <span className="text-[var(--ink-faint)]">/</span>}
           <span className="truncate px-1.5 text-[var(--ink)]">{tail || "Untitled"}</span>
         </>
       )}
@@ -165,7 +170,12 @@ type NoteViewProps = {
   notes: Note[];
   folders: Folder[];
   chain: Folder[];
+  /** The pages this one sits inside, outermost first. */
+  pages: Note[];
+  /** Pages directly inside this one. */
+  subpages: Note[];
   folderPath: (id: string) => string;
+  notePath: (n: Note) => string;
   saveState: SaveState;
   bar: Omit<React.ComponentProps<typeof TopBar>, "children" | "actions">;
   onNavigate: (v: View) => void;
@@ -176,6 +186,7 @@ type NoteViewProps = {
   onCopyLink: () => void;
   onDelete: () => void;
   onCreateNote: (title: string) => Note | Promise<Note>;
+  onCreateSubpage: (open: boolean) => Promise<Note>;
   registerInsert: (fn: ((markdown: string) => void) | null) => void;
   onToast: (msg: string) => void;
 };
@@ -199,7 +210,13 @@ export function NoteView(p: NoteViewProps) {
     el.style.height = `${el.scrollHeight}px`;
   }, [title]);
 
-  const backlinks = useMemo(() => p.notes.filter((n) => n.id !== note.id && n.links?.includes(note.id)), [p.notes, note.id]);
+  // The page this sits inside links here with its /page row; that isn't news, so it's left out.
+  const backlinks = useMemo(
+    () => p.notes.filter((n) => n.id !== note.id && n.id !== note.parentId && n.links?.includes(note.id)),
+    [p.notes, note.id, note.parentId],
+  );
+  // Subpages made from the sidebar (or whose row was deleted) still need a way in.
+  const unlisted = p.subpages.filter((n) => !note.links?.includes(n.id));
   const words = useMemo(() => plainText(note.content).split(/\s+/).filter(Boolean).length, [note.content]);
 
   const exportMd = () => {
@@ -237,6 +254,9 @@ export function NoteView(p: NoteViewProps) {
               </button>
               {menu && (
                 <Menu onClose={() => setMenu(false)}>
+                  <MenuItem icon={<IconPlus size={14} />} onClick={() => void p.onCreateSubpage(true)}>
+                    Add subpage
+                  </MenuItem>
                   <MenuItem icon={<IconLink size={14} />} onClick={p.onCopyLink}>
                     Copy link
                   </MenuItem>
@@ -247,8 +267,8 @@ export function NoteView(p: NoteViewProps) {
                     Move to…
                   </MenuItem>
                   <MenuSep />
-                  <MenuItem danger icon={<IconTrash size={14} />} onClick={() => window.confirm("Delete this note?") && p.onDelete()}>
-                    Delete note
+                  <MenuItem danger icon={<IconTrash size={14} />} onClick={p.onDelete}>
+                    Move to Trash
                   </MenuItem>
                 </Menu>
               )}
@@ -256,7 +276,7 @@ export function NoteView(p: NoteViewProps) {
           </div>
         }
       >
-        <Crumbs chain={p.chain} onNavigate={p.onNavigate} tail={title} />
+        <Crumbs chain={p.chain} pages={p.pages} onNavigate={p.onNavigate} tail={title} />
       </TopBar>
 
       <div className="scroll-soft min-h-0 flex-1 overflow-y-auto">
@@ -288,7 +308,7 @@ export function NoteView(p: NoteViewProps) {
             </span>
             <span>·</span>
             <span>
-              type <span className="kbd">/</span> for blocks, <span className="kbd">@</span> to link, <span className="kbd">@charlie</span> to hand off a task
+              <span className="kbd">/</span> blocks & pages · <span className="kbd">@</span> link · <span className="kbd">@charlie</span> hand off a task
             </span>
           </div>
 
@@ -300,9 +320,26 @@ export function NoteView(p: NoteViewProps) {
             folderPath={p.folderPath}
             onChange={p.onEditorChange}
             onCreateNote={p.onCreateNote}
+            onCreateSubpage={() => p.onCreateSubpage(false)}
             registerInsert={p.registerInsert}
             onToast={p.onToast}
           />
+
+          {unlisted.length > 0 && (
+            <section className="mt-10">
+              <h2 className="label mb-2 flex items-center gap-1.5">
+                <IconNote size={11} /> pages inside
+              </h2>
+              <div className="-mx-1.5">
+                {unlisted.map((n) => (
+                  <button key={n.id} className="page-block" onClick={() => p.onNavigate({ kind: "note", id: n.id })}>
+                    <IconNote size={16} />
+                    <span className="page-block-title">{n.title.trim() || "Untitled"}</span>
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
 
           {backlinks.length > 0 && (
             <section className="hairline-t mt-16 pt-6">
@@ -311,7 +348,7 @@ export function NoteView(p: NoteViewProps) {
               </h2>
               <div className="grid gap-3 sm:grid-cols-2">
                 {backlinks.map((n) => (
-                  <NoteCard key={n.id} note={n} path={p.folderPath(n.folderId)} onOpen={() => p.onNavigate({ kind: "note", id: n.id })} />
+                  <NoteCard key={n.id} note={n} path={p.notePath(n)} onOpen={() => p.onNavigate({ kind: "note", id: n.id })} />
                 ))}
               </div>
             </section>
@@ -332,6 +369,7 @@ type ListViewProps = {
   subfolders: Folder[];
   notes: Note[];
   folderPath: (id: string) => string;
+  notePath: (n: Note) => string;
   bar: Omit<React.ComponentProps<typeof TopBar>, "children" | "actions">;
   onNavigate: (v: View) => void;
   onNewNote: () => void;
@@ -398,7 +436,7 @@ export function ListView(p: ListViewProps) {
               {(["edited", "title"] as const).map((s) => (
                 <button
                   key={s}
-                  className={`rounded-full px-3 py-1 font-mono text-[11px] ${sort === s ? "bg-[var(--accent)] text-white" : "text-[var(--ink-soft)]"}`}
+                  className={`rounded-full px-3 py-1 font-mono text-[11px] ${sort === s ? "bg-[var(--accent)] text-[var(--on-accent)]" : "text-[var(--ink-soft)]"}`}
                   onClick={() => setSort(s)}
                 >
                   {s}
@@ -420,7 +458,7 @@ export function ListView(p: ListViewProps) {
           {sorted.length ? (
             <div className="mt-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {sorted.slice(0, limit).map((n) => (
-                <NoteCard key={n.id} note={n} path={p.folder ? undefined : p.folderPath(n.folderId)} onOpen={() => p.onNavigate({ kind: "note", id: n.id })} />
+                <NoteCard key={n.id} note={n} path={p.folder ? undefined : p.notePath(n)} onOpen={() => p.onNavigate({ kind: "note", id: n.id })} />
               ))}
             </div>
           ) : null}
@@ -452,7 +490,7 @@ function greeting() {
 type HomeViewProps = {
   username: string | null;
   notes: Note[];
-  folderPath: (id: string) => string;
+  notePath: (n: Note) => string;
   aiReady: boolean;
   bar: Omit<React.ComponentProps<typeof TopBar>, "children" | "actions">;
   onNavigate: (v: View) => void;
@@ -551,7 +589,7 @@ export function HomeView(p: HomeViewProps) {
               <h2 className="label mb-3 mt-12">recently edited</h2>
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 {recent.map((n) => (
-                  <NoteCard key={n.id} note={n} path={p.folderPath(n.folderId)} onOpen={() => p.onNavigate({ kind: "note", id: n.id })} />
+                  <NoteCard key={n.id} note={n} path={p.notePath(n)} onOpen={() => p.onNavigate({ kind: "note", id: n.id })} />
                 ))}
               </div>
             </>
@@ -562,3 +600,85 @@ export function HomeView(p: HomeViewProps) {
   );
 }
 
+/* ---------- the Trash ---------- */
+
+type TrashViewProps = {
+  trash: Note[];
+  notePath: (n: Note) => string;
+  bar: Omit<React.ComponentProps<typeof TopBar>, "children" | "actions">;
+  onRestore: (id: string) => void;
+  onPurge: (id: string) => void;
+  onEmpty: () => void;
+};
+
+export function TrashView(p: TrashViewProps) {
+  const [now] = useState(() => Date.now());
+  // Subpages that went with their page are listed under it, not on their own.
+  const ids = new Set(p.trash.map((n) => n.id));
+  const roots = p.trash
+    .filter((n) => !(n.parentId && ids.has(n.parentId) && p.trash.find((x) => x.id === n.parentId)?.deletedAt === n.deletedAt))
+    .sort((a, b) => (b.deletedAt ?? "").localeCompare(a.deletedAt ?? ""));
+  const inside = (id: string): number => p.trash.filter((n) => n.parentId === id).reduce((s, n) => s + 1 + inside(n.id), 0);
+  const daysLeft = (n: Note) => Math.max(0, Math.ceil(30 - (now - Date.parse(n.deletedAt ?? "")) / 86400000));
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <TopBar {...p.bar}>
+        <span className="px-1.5 text-[var(--ink)]">Trash</span>
+      </TopBar>
+      <div className="scroll-soft min-h-0 flex-1 overflow-y-auto">
+        <div className="fade-in mx-auto w-full max-w-[860px] px-6 pb-24 pt-10 sm:px-12 sm:pt-14">
+          <p className="label">{roots.length} {roots.length === 1 ? "item" : "items"} · deleted for good after 30 days</p>
+          <div className="mt-1 flex items-center gap-3">
+            <h1 className="font-serif flex-1 text-[38px] font-semibold tracking-tight sm:text-[46px]">Trash</h1>
+            {roots.length > 0 && (
+              <button
+                className="btn btn-sm text-[var(--danger)]"
+                onClick={() => window.confirm("Delete everything in the Trash for good? This can't be undone.") && p.onEmpty()}
+              >
+                <IconTrash size={14} /> Empty Trash
+              </button>
+            )}
+          </div>
+          {roots.length === 0 ? (
+            <div className="mt-16 text-center">
+              <p className="font-hand -rotate-2 text-[28px] text-[var(--ink-soft)]">nothing in here</p>
+              <p className="mt-2 text-[14px] text-[var(--ink-soft)]">Deleted notes wait here for 30 days, in case you want them back.</p>
+            </div>
+          ) : (
+            <ul className="card mt-8 divide-y divide-[var(--hairline)] overflow-hidden !rounded-2xl">
+              {roots.map((n) => {
+                const k = inside(n.id);
+                return (
+                  <li key={n.id} className="flex items-center gap-3 px-4 py-3">
+                    <span className="text-[var(--ink-faint)]">
+                      <IconNote size={16} />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-[14.5px] font-medium">{n.title.trim() || "Untitled"}</div>
+                      <div className="label mt-0.5 truncate">
+                        {p.notePath(n).toLowerCase()}
+                        {k ? ` · ${k} page${k === 1 ? "" : "s"} inside` : ""} · {daysLeft(n)} d left
+                      </div>
+                    </div>
+                    <button className="btn btn-sm" onClick={() => p.onRestore(n.id)}>
+                      Restore
+                    </button>
+                    <button
+                      className="icon-btn"
+                      title="Delete for good"
+                      aria-label="Delete for good"
+                      onClick={() => window.confirm(`Delete “${n.title.trim() || "Untitled"}” for good? This can't be undone.`) && p.onPurge(n.id)}
+                    >
+                      <IconTrash size={15} />
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

@@ -24,7 +24,8 @@ export type AgentEvent = { runId: string } & (
   | { type: "error"; message: string }
   | { type: "stopped" }
 );
-export type MenuAction = "settings" | "new-note" | "new-folder" | "search" | "ask" | "toggle-sidebar" | "home";
+export type ThemeMode = "system" | "light" | "dark";
+export type MenuAction = "settings" | "new-note" | "new-folder" | "search" | "ask" | "toggle-sidebar" | "home" | `theme-${ThemeMode}`;
 
 // Exposed by electron/preload.js. The notepad only runs inside the Mac app; a plain browser has no bridge.
 type Bridge = {
@@ -34,6 +35,9 @@ type Bridge = {
   load: () => Promise<WorkspaceData | null>;
   save: (data: WorkspaceData) => Promise<void>;
   revealData: () => void;
+  /** The appearance saved on this Mac, and setting it (window chrome and native menus follow). */
+  theme?: ThemeMode;
+  setTheme?: (theme: ThemeMode) => Promise<void>;
   onMenu: (cb: (action: MenuAction) => void) => () => void;
   onOpen: (cb: (target: { kind: "note" | "folder"; id: string }) => void) => () => void;
   onUpdate: (cb: (update: { version: string; url: string }) => void) => () => void;
@@ -78,6 +82,9 @@ export const userName = () => bridge()?.userName || null;
 export const dataPath = () => bridge()?.dataPath ?? null;
 
 export const revealData = () => bridge()?.revealData();
+
+export const savedTheme = (): ThemeMode | null => bridge()?.theme ?? null;
+export const setNativeTheme = (theme: ThemeMode) => bridge()?.setTheme?.(theme);
 
 export const onMenu = (cb: (action: MenuAction) => void) => bridge()?.onMenu(cb) ?? (() => {});
 

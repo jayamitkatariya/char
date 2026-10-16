@@ -16,11 +16,12 @@ import {
   type BuiltInAgent,
   type DetectedAgents,
 } from "@/lib/desktop";
+import { setThemeMode, useTheme, type ThemeMode } from "@/lib/theme";
 import { newId, type WorkspaceData } from "@/lib/useWorkspace";
-import { IconCheck, IconDownload, IconFolder, IconRetry, IconSparkle, IconTerminal, IconUpload, IconX } from "../icons";
+import { IconCheck, IconDownload, IconFolder, IconMonitor, IconMoon, IconRetry, IconSparkle, IconSun, IconTerminal, IconUpload, IconX } from "../icons";
 import { Markdown } from "./Markdown";
 
-type Tab = "ai" | "agents" | "data" | "storage";
+type Tab = "appearance" | "ai" | "agents" | "data" | "storage";
 
 type Props = {
   initialTab?: Tab;
@@ -56,12 +57,12 @@ export function SettingsDialog(p: Props) {
   }, []);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(43,38,32,0.22)] p-4 backdrop-blur-[2px]" onMouseDown={p.onClose}>
+    <div className="scrim fixed inset-0 z-50 flex items-center justify-center p-4" onMouseDown={p.onClose}>
       <div
         role="dialog"
         aria-modal="true"
         aria-label="Settings"
-        className="card pop-in flex max-h-[90dvh] w-full max-w-[560px] flex-col overflow-hidden !rounded-3xl !shadow-[var(--shadow-lg)]"
+        className="card pop-in flex max-h-[90dvh] w-full max-w-[560px] flex-col overflow-hidden !rounded-3xl !shadow-[var(--shadow-lg)] outline-none"
         ref={box}
         tabIndex={-1}
         onMouseDown={(e) => e.stopPropagation()}
@@ -77,6 +78,7 @@ export function SettingsDialog(p: Props) {
             [
               ["ai", "AI model"],
               ["agents", "Agents"],
+              ["appearance", "Appearance"],
               ["data", "Import & export"],
               ["storage", "Storage"],
             ] as const
@@ -94,6 +96,7 @@ export function SettingsDialog(p: Props) {
         <div className="scroll-soft overflow-y-auto px-6 py-5">
           {tab === "ai" && <AITab settings={p.settings} onSave={p.onSave} />}
           {tab === "agents" && <AgentsTab />}
+          {tab === "appearance" && <AppearanceTab />}
           {tab === "data" && <DataTab data={p.data} onImport={p.onImport} />}
           {tab === "storage" && (
             <div className="space-y-4">
@@ -108,6 +111,38 @@ export function SettingsDialog(p: Props) {
             </div>
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+function AppearanceTab() {
+  const { mode } = useTheme();
+  const options: [ThemeMode, string, React.ReactNode][] = [
+    ["system", "Match System", <IconMonitor key="s" size={18} />],
+    ["light", "Light", <IconSun key="l" size={18} />],
+    ["dark", "Dark", <IconMoon key="d" size={18} />],
+  ];
+  return (
+    <div className="space-y-4">
+      <p className="text-[13.5px] leading-relaxed text-[var(--ink-soft)]">
+        Match System follows macOS, switching with it. The window, menus and editor all change together. Also in View → Appearance.
+      </p>
+      <div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Appearance">
+        {options.map(([id, label, icon]) => (
+          <button
+            key={id}
+            role="radio"
+            aria-checked={mode === id}
+            className={`flex flex-col items-center gap-2 rounded-2xl border px-3 py-4 text-[13px] transition-colors ${
+              mode === id ? "border-transparent bg-[var(--accent)] text-[var(--on-accent)]" : "border-[var(--hairline)] bg-[var(--card)] hover:bg-[var(--hover)]"
+            }`}
+            onClick={() => setThemeMode(id)}
+          >
+            {icon}
+            {label}
+          </button>
+        ))}
       </div>
     </div>
   );
@@ -169,7 +204,7 @@ function AITab({ settings, onSave }: { settings: AISettings | null; onSave: (s: 
             <button
               key={pr.id}
               className={`rounded-full border px-3 py-1.5 text-[12.5px] transition-colors ${
-                preset === pr.id ? "border-transparent bg-[var(--accent)] text-white" : "border-[var(--hairline)] bg-[var(--card)] hover:bg-[var(--hover)]"
+                preset === pr.id ? "border-transparent bg-[var(--accent)] text-[var(--on-accent)]" : "border-[var(--hairline)] bg-[var(--card)] hover:bg-[var(--hover)]"
               }`}
               onClick={() => choose(pr.id)}
             >
@@ -256,7 +291,7 @@ function AITab({ settings, onSave }: { settings: AISettings | null; onSave: (s: 
           </div>
         )}
         {status.msg && (
-          <p className={`mt-2 text-[12.5px] ${status.kind === "error" ? "text-[var(--danger)]" : "text-[#3f7a3a]"}`} role="status">
+          <p className={`mt-2 text-[12.5px] ${status.kind === "error" ? "text-[var(--danger)]" : "text-[var(--success)]"}`} role="status">
             {status.msg}
           </p>
         )}
@@ -551,13 +586,13 @@ function AgentsTab() {
               <button
                 key={id}
                 className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-left transition-colors ${
-                  on ? "border-transparent bg-[var(--accent)] text-white" : "border-[var(--hairline)] bg-[var(--card)] hover:bg-[var(--hover)]"
+                  on ? "border-transparent bg-[var(--accent)] text-[var(--on-accent)]" : "border-[var(--hairline)] bg-[var(--card)] hover:bg-[var(--hover)]"
                 }`}
                 onClick={() => setDraft({ ...draft, agent: id })}
               >
                 <span className="min-w-0 flex-1">
                   <span className="block text-[13px] font-medium">{a?.label ?? id}</span>
-                  <span className={`block truncate font-mono text-[10.5px] ${on ? "text-white/70" : st?.signedIn === false ? "text-[var(--danger)]" : "text-[var(--ink-faint)]"}`}>
+                  <span className={`block truncate font-mono text-[10.5px] ${on ? "text-[var(--on-accent)]/70" : st?.signedIn === false ? "text-[var(--danger)]" : "text-[var(--ink-faint)]"}`}>
                     {sub}
                   </span>
                 </span>
@@ -567,7 +602,7 @@ function AgentsTab() {
           })}
           <button
             className={`col-span-2 rounded-xl border px-3 py-2 text-left text-[13px] font-medium transition-colors ${
-              draft.agent === "custom" ? "border-transparent bg-[var(--accent)] text-white" : "border-[var(--hairline)] bg-[var(--card)] hover:bg-[var(--hover)]"
+              draft.agent === "custom" ? "border-transparent bg-[var(--accent)] text-[var(--on-accent)]" : "border-[var(--hairline)] bg-[var(--card)] hover:bg-[var(--hover)]"
             }`}
             onClick={() => setDraft({ ...draft, agent: "custom" })}
           >

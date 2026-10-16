@@ -216,7 +216,7 @@ export function ChatPanel(p: Props) {
               </div>
             )}
             {error && (
-              <div role="alert" className="mt-4 rounded-xl bg-[#fdecea] px-3 py-2 text-[13px] text-[#9a3412]">
+              <div role="alert" className="mt-4 rounded-xl bg-[var(--danger-bg)] px-3 py-2 text-[13px] text-[var(--danger-ink)]">
                 {error}
                 <button className="ml-2 underline" onClick={p.onSetup}>
                   Check settings
@@ -253,14 +253,14 @@ export function ChatPanel(p: Props) {
               </span>
               <span className="flex-1" />
               {streaming ? (
-                <button type="button" className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--accent)] text-white" title="Stop" onClick={() => abort.current?.abort()}>
+                <button type="button" className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--accent)] text-[var(--on-accent)]" title="Stop" onClick={() => abort.current?.abort()}>
                   <IconStop size={14} />
                 </button>
               ) : (
                 <button
                   type="submit"
                   disabled={!input.trim()}
-                  className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--accent)] text-white transition-opacity disabled:opacity-30"
+                  className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--accent)] text-[var(--on-accent)] transition-opacity disabled:opacity-30"
                   title="Send"
                 >
                   <IconSend size={15} />

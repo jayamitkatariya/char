@@ -4,7 +4,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { Folder, Note } from "@/lib/types";
 import { agentLabel } from "@/lib/charlie";
 import { isDesktop } from "@/lib/desktop";
-import { IconClock, IconFolder, IconMove, IconNote, IconPin, IconPlus, IconSearch, IconSettings, IconSparkle, IconSun, IconTerminal, IconWand } from "../icons";
+import { IconClock, IconFolder, IconMonitor, IconMoon, IconMove, IconNote, IconPin, IconPlus, IconSearch, IconSettings, IconSparkle, IconSun, IconTerminal, IconTrash, IconWand } from "../icons";
+import { setThemeMode, themeMode } from "@/lib/theme";
 import { fuzzy, Highlight } from "./fuzzy";
 import { plainText } from "./Markdown";
 import type { View } from "./Sidebar";
@@ -26,6 +27,7 @@ type Props = {
   notes: Note[];
   folders: Folder[];
   folderPath: (id: string) => string;
+  notePath: (n: Note) => string;
   onClose: () => void;
   onNavigate: (v: View) => void;
   onNewNote: (title?: string) => void;
@@ -37,6 +39,7 @@ type Props = {
   current: { title: string; pinned: boolean } | null;
   onTogglePin: () => void;
   onMoveNote: () => void;
+  onNewSubpage: () => void;
 };
 
 const RECENT = 8;
@@ -69,7 +72,7 @@ export function CommandPalette(p: Props) {
       group,
       icon,
       title: n.title.trim() || "Untitled",
-      sub: p.folderPath(n.folderId),
+      sub: p.notePath(n),
       run: open(n),
     });
 
@@ -95,6 +98,7 @@ export function CommandPalette(p: Props) {
       ...(p.current
         ? [
             { key: "tidy", icon: <IconWand size={15} />, title: "Tidy this note", sub: "Loose lines into to-dos and bullets", hint: "⌘⇧T", run: close(() => window.dispatchEvent(new Event("char:tidy"))) },
+            { key: "subpage", icon: <IconPlus size={15} />, title: "New page inside this one", sub: "Or type /page in the note", run: close(p.onNewSubpage) },
             { key: "pin", icon: <IconPin size={15} />, title: p.current.pinned ? "Unpin this note" : "Pin this note", hint: "⌘⇧P", run: close(p.onTogglePin) },
             { key: "move", icon: <IconMove size={15} />, title: "Move this note…", run: close(p.onMoveNote) },
           ]
@@ -102,7 +106,17 @@ export function CommandPalette(p: Props) {
       { key: "today", icon: <IconSun size={15} />, title: "Go to Today", hint: "⌘⇧H", run: close(() => p.onNavigate({ kind: "home" })) },
       { key: "all", icon: <IconNote size={15} />, title: "Go to All notes", run: close(() => p.onNavigate({ kind: "all" })) },
       { key: "pinned", icon: <IconPin size={15} />, title: "Go to Pinned", run: close(() => p.onNavigate({ kind: "pinned" })) },
+      { key: "trash", icon: <IconTrash size={15} />, title: "Go to Trash", run: close(() => p.onNavigate({ kind: "trash" })) },
       { key: "folder", icon: <IconFolder size={15} />, title: "New folder", run: close(p.onNewFolder) },
+      ...(
+        [
+          ["dark", "Dark mode", <IconMoon key="d" size={15} />],
+          ["light", "Light mode", <IconSun key="l" size={15} />],
+          ["system", "Appearance: match system", <IconMonitor key="s" size={15} />],
+        ] as const
+      )
+        .filter(([m]) => m !== themeMode())
+        .map(([m, title, icon]) => ({ key: `theme-${m}`, icon, title, sub: "Appearance", run: close(() => setThemeMode(m)) })),
       { key: "settings", icon: <IconSettings size={15} />, title: "Settings & AI key", hint: "⌘,", run: close(p.onSettings) },
       ...(isDesktop() ? [{ key: "agents", icon: <IconTerminal size={15} />, title: "charlie's agent settings", run: close(p.onAgentSettings) }] : []),
     ];
@@ -121,7 +135,7 @@ export function CommandPalette(p: Props) {
         const title = n.title.trim() || "Untitled";
         const t = fuzzy(title, q);
         if (t) return { n, score: t.score + 100, hits: t.hits, inBody: false };
-        const path = p.folderPath(n.folderId).toLowerCase();
+        const path = p.notePath(n).toLowerCase();
         if (path.includes(q)) return { n, score: 40, inBody: false };
         if (n.content.toLowerCase().includes(q)) return { n, score: 20, inBody: true };
         return null;
@@ -131,7 +145,7 @@ export function CommandPalette(p: Props) {
       .slice(0, 12)
       .map<Item>(({ n, hits, inBody }) => {
         const s = inBody ? snippet(n.content, q) : null;
-        return { ...noteItem("Notes", n), hits, sub: s ? s.text : p.folderPath(n.folderId), subHits: s?.hits };
+        return { ...noteItem("Notes", n), hits, sub: s ? s.text : p.notePath(n), subHits: s?.hits };
       });
     const folderHits = p.folders
       .map((f) => ({ f, m: fuzzy(f.name, q) }))
@@ -161,7 +175,7 @@ export function CommandPalette(p: Props) {
   }, [active]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-[rgba(43,38,32,0.18)] px-4 pt-[12vh] backdrop-blur-[2px]" onMouseDown={p.onClose}>
+    <div className="scrim fixed inset-0 z-50 flex items-start justify-center px-4 pt-[12vh]" onMouseDown={p.onClose}>
       <div className="card pop-in w-full max-w-[600px] overflow-hidden !rounded-2xl !shadow-[var(--shadow-lg)]" onMouseDown={(e) => e.stopPropagation()}>
         <div className="hairline-b flex items-center gap-3 px-4">
           <IconSearch size={17} />

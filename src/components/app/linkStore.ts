@@ -22,6 +22,9 @@ export function setLinkState(next: State) {
 
 export const openLink = (kind: LinkKind, id: string) => state.open(kind, id);
 
+/** The current title, for exports written outside React (markdown, the AI's copy). */
+export const linkTitle = (id: string) => state.titles.get(id);
+
 export function useLinkTitle(id: string): string | undefined {
   return useSyncExternalStore(
     (cb) => {
@@ -33,14 +36,15 @@ export function useLinkTitle(id: string): string | undefined {
   );
 }
 
-/** Every note/folder id referenced by an @-link anywhere in a BlockNote document. */
+/** Every note/folder id referenced by an @-link or a /page block anywhere in a BlockNote document. */
 export function collectLinks(doc: unknown): string[] {
   const out = new Set<string>();
   const walk = (v: unknown) => {
     if (Array.isArray(v)) v.forEach(walk);
     else if (v && typeof v === "object") {
-      const o = v as { type?: string; props?: { id?: string } };
+      const o = v as { type?: string; props?: { id?: string; pageId?: string } };
       if (o.type === "noteLink" && o.props?.id) out.add(o.props.id);
+      if (o.type === "subpage" && o.props?.pageId) out.add(o.props.pageId);
       Object.values(o).forEach(walk);
     }
   };

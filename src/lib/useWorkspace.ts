@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { loadWorkspace, saveWorkspace, type WorkspaceData } from "./desktop";
 import type { Folder, Note } from "./types";
 
@@ -50,12 +50,30 @@ function starter(): WorkspaceData {
   };
 }
 
+export const TRASH_DAYS = 30;
+
 // Tolerates files written by older versions or exported from the web app.
 function normalize(d: Partial<WorkspaceData>): WorkspaceData {
   return {
     folders: (d.folders ?? []).map((f) => ({ id: f.id, name: f.name ?? "Untitled folder", parentId: f.parentId ?? null })),
-    notes: (d.notes ?? []).map((n) => ({ ...n, title: n.title ?? "", content: n.content ?? "", pinned: !!n.pinned })),
+    notes: (d.notes ?? []).map((n) => ({ ...n, title: n.title ?? "", content: n.content ?? "", pinned: !!n.pinned, parentId: n.parentId ?? null, deletedAt: n.deletedAt ?? null })),
   };
+}
+
+/** Every subpage below a page, at any depth. */
+export function subpagesOf(notes: Note[], id: string): Set<string> {
+  const kids = new Map<string, string[]>();
+  for (const n of notes) if (n.parentId) kids.set(n.parentId, [...(kids.get(n.parentId) ?? []), n.id]);
+  const out = new Set<string>();
+  const walk = (pid: string) => {
+    for (const k of kids.get(pid) ?? []) {
+      if (out.has(k) || k === id) continue;
+      out.add(k);
+      walk(k);
+    }
+  };
+  walk(id);
+  return out;
 }
 
 export function useWorkspace() {
@@ -69,7 +87,15 @@ export function useWorkspace() {
     loadWorkspace()
       .then((stored) => {
         if (!live) return;
-        const initial = stored ? normalize(stored) : starter();
+        let initial = stored ? normalize(stored) : starter();
+        // The Trash empties itself of anything older than 30 days.
+        const cutoff = Date.now() - TRASH_DAYS * 86400 * 1000;
+        const expired = initial.notes.filter((n) => n.deletedAt && Date.parse(n.deletedAt) < cutoff);
+        if (expired.length) {
+          const gone = new Set(expired.map((n) => n.id));
+          initial = { ...initial, notes: initial.notes.filter((n) => !gone.has(n.id)) };
+          saveWorkspace(initial).catch(() => {});
+        }
         current.current = initial;
         setData(initial);
         if (!stored) saveWorkspace(initial);
@@ -106,8 +132,73 @@ export function useWorkspace() {
     await commit((d) => ({ ...d, notes: d.notes.map((n) => (n.id === id ? { ...n, ...rest, updatedAt } : n)) }));
   };
 
+  // To the Trash, with its subpages (like a folder with its notes). Returns the stamp that
+  // restoring uses to bring back exactly what went together.
   const deleteNote = async (id: string) => {
-    await commit((d) => ({ ...d, notes: d.notes.filter((n) => n.id !== id) }));
+    const stamp = new Date().toISOString();
+    await commit((d) => {
+      const going = subpagesOf(d.notes.filter((n) => !n.deletedAt), id).add(id);
+      return { ...d, notes: d.notes.map((n) => (going.has(n.id) && !n.deletedAt ? { ...n, deletedAt: stamp } : n)) };
+    });
+    return stamp;
+  };
+
+  /** Brings a note back from the Trash, with the subpages that went with it. */
+  const restoreNote = async (id: string) => {
+    await commit((d) => {
+      const note = d.notes.find((n) => n.id === id);
+      if (!note?.deletedAt) return d;
+      const stamp = note.deletedAt;
+      const back = new Set([id, ...[...subpagesOf(d.notes, id)].filter((k) => d.notes.find((n) => n.id === k)?.deletedAt === stamp)]);
+      let folders = d.folders;
+      // Its folder may have been deleted since: it comes back to Notes instead.
+      const home = folders.some((f) => f.id === note.folderId) ? note.folderId : DEFAULT_FOLDER;
+      if (!folders.some((f) => f.id === home)) folders = [...folders, { id: DEFAULT_FOLDER, name: "Notes", parentId: null }];
+      const parent = note.parentId ? d.notes.find((n) => n.id === note.parentId) : undefined;
+      const parentLive = parent && !parent.deletedAt;
+      return {
+        folders,
+        notes: d.notes.map((n) => {
+          if (!back.has(n.id)) return n;
+          const moved = home !== note.folderId ? { folderId: home } : {};
+          if (n.id === id) return { ...n, ...moved, deletedAt: null, parentId: parentLive ? n.parentId : null };
+          return { ...n, ...moved, deletedAt: null };
+        }),
+      };
+    });
+  };
+
+  /** Deletes for good: a note in the Trash with its subpages, or (from cleanup) any note. */
+  const purgeNote = async (id: string) => {
+    await commit((d) => {
+      const gone = subpagesOf(d.notes, id).add(id);
+      return { ...d, notes: d.notes.filter((n) => !gone.has(n.id)) };
+    });
+  };
+
+  const emptyTrash = async () => {
+    await commit((d) => ({ ...d, notes: d.notes.filter((n) => !n.deletedAt) }));
+  };
+
+  /** Puts a page in a folder (top level) or inside another page; its subpages come along. */
+  const moveNote = async (id: string, to: { folderId: string } | { parentId: string }) => {
+    await commit((d) => {
+      const below = subpagesOf(d.notes, id);
+      let folderId: string;
+      let parentId: string | null = null;
+      if ("parentId" in to) {
+        const parent = d.notes.find((n) => n.id === to.parentId);
+        // Never inside itself or one of its own subpages.
+        if (!parent || parent.id === id || below.has(parent.id)) return d;
+        folderId = parent.folderId;
+        parentId = parent.id;
+      } else folderId = to.folderId;
+      // Moving isn't editing, so "edited" times stay as they were.
+      return {
+        ...d,
+        notes: d.notes.map((n) => (n.id === id ? { ...n, folderId, parentId } : below.has(n.id) ? { ...n, folderId } : n)),
+      };
+    });
   };
 
   const createFolder = async (name: string, parentId: string | null) => {
@@ -127,8 +218,11 @@ export function useWorkspace() {
     await patchFolder(id, { parentId });
   };
 
-  // Removes the folder, its subfolders, and every note inside them.
+  // Removes the folder and its subfolders; the notes inside go to the Trash. Returns what's needed
+  // to undo it.
   const deleteFolder = async (id: string) => {
+    const stamp = new Date().toISOString();
+    let removed: Folder[] = [];
     await commit((d) => {
       const doomed = new Set<string>([id]);
       let grew = true;
@@ -141,8 +235,21 @@ export function useWorkspace() {
           }
         }
       }
-      return { folders: d.folders.filter((f) => !doomed.has(f.id)), notes: d.notes.filter((n) => !doomed.has(n.folderId)) };
+      removed = d.folders.filter((f) => doomed.has(f.id));
+      return {
+        folders: d.folders.filter((f) => !doomed.has(f.id)),
+        notes: d.notes.map((n) => (doomed.has(n.folderId) && !n.deletedAt ? { ...n, deletedAt: stamp } : n)),
+      };
     });
+    return { stamp, folders: removed };
+  };
+
+  /** Puts back folders deleted together, and the notes that went to the Trash with them. */
+  const undoDeleteFolder = async ({ stamp, folders: back }: { stamp: string; folders: Folder[] }) => {
+    await commit((d) => ({
+      folders: [...d.folders, ...back.filter((f) => !d.folders.some((x) => x.id === f.id))],
+      notes: d.notes.map((n) => (n.deletedAt === stamp ? { ...n, deletedAt: null } : n)),
+    }));
   };
 
   // Merges a char/jknotes export by ID, so existing notes are kept.
@@ -158,22 +265,32 @@ export function useWorkspace() {
     return add.notes.length;
   };
 
+  const notes = useMemo(() => (data?.notes ?? []).filter((n) => !n.deletedAt), [data]);
+  const trash = useMemo(() => (data?.notes ?? []).filter((n) => n.deletedAt), [data]);
+
   return {
     loaded: data !== null,
     folders: data?.folders ?? [],
-    notes: data?.notes ?? [],
+    /** Live notes; the Trash is separate. */
+    notes,
+    trash,
     error,
     clearError: () => setError(null),
     createNote,
     updateNote,
     deleteNote,
+    restoreNote,
+    purgeNote,
+    emptyTrash,
+    moveNote,
     createFolder,
     renameFolder,
     moveFolder,
     deleteFolder,
+    undoDeleteFolder,
     importData,
     /** The latest stored copy, including changes made since the last render. */
-    getNote: (id: string) => current.current?.notes.find((n) => n.id === id),
+    getNote: (id: string) => current.current?.notes.find((n) => n.id === id && !n.deletedAt),
   };
 }
 

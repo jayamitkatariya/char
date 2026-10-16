@@ -6,7 +6,7 @@ import { createReactBlockSpec, createReactInlineContentSpec } from "@blocknote/r
 import { elapsed, stopRun, useRun, type Run } from "@/lib/charlie";
 import { agentBridge, type AgentStep, type TranscriptEntry } from "@/lib/desktop";
 import { IconFolder, IconNote, IconRetry, IconStop, IconTerminal, IconX } from "../icons";
-import { openLink, useLinkTitle, type LinkKind } from "./linkStore";
+import { linkTitle, openLink, useLinkTitle, type LinkKind } from "./linkStore";
 
 /* ---------- @-links: an inline chip pointing at a note or folder ---------- */
 
@@ -41,8 +41,41 @@ const NoteLink = createReactInlineContentSpec(
     // Markdown/HTML export: a plain link the AI and exports can follow.
     toExternalHTML: ({ inlineContent }) => (
       <a href={`char://${inlineContent.props.kind === "folder" ? "folder" : "note"}/${inlineContent.props.id}`}>
-        {inlineContent.props.title || "Untitled"}
+        {linkTitle(inlineContent.props.id) || inlineContent.props.title || "Untitled"}
       </a>
+    ),
+  },
+);
+
+/* ---------- /page: a subpage, shown as a row you click to open ---------- */
+
+function PageRow({ pageId, title }: { pageId: string; title: string }) {
+  const live = useLinkTitle(pageId);
+  const missing = live === undefined;
+  return (
+    <div
+      className="page-block"
+      data-missing={missing}
+      contentEditable={false}
+      role="link"
+      title={missing ? "This page was deleted" : "Open page"}
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={() => !missing && openLink("note", pageId)}
+    >
+      <IconNote size={16} />
+      <span className="page-block-title">{missing ? "Deleted page" : (live ?? title) || "Untitled"}</span>
+    </div>
+  );
+}
+
+const Subpage = createReactBlockSpec(
+  { type: "subpage", propSchema: { pageId: { default: "" }, title: { default: "" } }, content: "none" },
+  {
+    render: ({ block }) => <PageRow pageId={block.props.pageId} title={block.props.title} />,
+    toExternalHTML: ({ block }) => (
+      <p>
+        <a href={`char://note/${block.props.pageId}`}>{linkTitle(block.props.pageId) || block.props.title || "Untitled"}</a>
+      </p>
     ),
   },
 );
@@ -342,7 +375,7 @@ const AgentRun = createReactBlockSpec(
 /* ---------- schema ---------- */
 
 export const schema = BlockNoteSchema.create({
-  blockSpecs: { ...defaultBlockSpecs, agentRun: AgentRun() },
+  blockSpecs: { ...defaultBlockSpecs, agentRun: AgentRun(), subpage: Subpage() },
   inlineContentSpecs: { ...defaultInlineContentSpecs, noteLink: NoteLink, charlie: CharlieChip },
 });
 

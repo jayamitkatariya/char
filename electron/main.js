@@ -1,7 +1,7 @@
 // char for macOS: a window around the static Next.js export in out/, a JSON file for the notes,
 // and @charlie, which hands tasks to a coding agent installed on this Mac (see ./agents.js).
 
-const { app, BrowserWindow, Menu, dialog, ipcMain, net, protocol, screen, session, shell } = require("electron");
+const { app, BrowserWindow, Menu, dialog, ipcMain, nativeTheme, net, protocol, screen, session, shell } = require("electron");
 const { execFile, execFileSync } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -101,8 +101,28 @@ const guard = (fn) => (e, ...args) => {
 };
 
 ipcMain.on("char:info", (e) => {
-  e.returnValue = fromApp(e) ? { userName: firstName(), dataPath: dataFile(), version: app.getVersion() } : {};
+  e.returnValue = fromApp(e) ? { userName: firstName(), dataPath: dataFile(), version: app.getVersion(), theme: savedTheme() } : {};
 });
+
+/* ---------- appearance: System, Light or Dark ---------- */
+
+// nativeTheme drives the window chrome, native menus and the page's prefers-color-scheme.
+const THEMES = new Set(["system", "light", "dark"]);
+const savedTheme = () => {
+  const t = readJson(userFile("prefs.json"), {}).theme;
+  return THEMES.has(t) ? t : "system";
+};
+const windowColor = () => (nativeTheme.shouldUseDarkColors ? "#1b1915" : "#fdfcfa");
+ipcMain.handle(
+  "theme:set",
+  guard((_e, theme) => {
+    if (!THEMES.has(theme)) return;
+    nativeTheme.themeSource = theme;
+    writeJsonAtomic(userFile("prefs.json"), { ...readJson(userFile("prefs.json"), {}), theme });
+    buildMenu();
+  }),
+);
+nativeTheme.on("updated", () => win?.setBackgroundColor(windowColor()));
 ipcMain.handle("workspace:load", guard(() => loadWorkspace()));
 ipcMain.handle("workspace:save", guard((_e, data) => saveWorkspace(data)));
 ipcMain.on("workspace:reveal", (e) => {
@@ -416,7 +436,7 @@ function createWindow() {
     title: "char",
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 16, y: 16 },
-    backgroundColor: "#fdfcfa",
+    backgroundColor: windowColor(),
     show: false,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
@@ -535,6 +555,16 @@ function buildMenu() {
         { label: "Back", accelerator: "CmdOrCtrl+[", click: () => win?.webContents.navigationHistory.canGoBack() && win.webContents.navigationHistory.goBack() },
         { label: "Forward", accelerator: "CmdOrCtrl+]", click: () => win?.webContents.navigationHistory.canGoForward() && win.webContents.navigationHistory.goForward() },
         { type: "separator" },
+        {
+          label: "Appearance",
+          submenu: ["system", "light", "dark"].map((t) => ({
+            label: t === "system" ? "Match System" : t === "light" ? "Light" : "Dark",
+            type: "radio",
+            checked: nativeTheme.themeSource === t,
+            click: () => sendMenu(`theme-${t}`),
+          })),
+        },
+        { type: "separator" },
         { role: "resetZoom" },
         { role: "zoomIn" },
         { role: "zoomOut" },
@@ -570,6 +600,7 @@ if (!app.requestSingleInstanceLock()) {
 
   app.whenReady().then(() => {
     agents.setLogDir(userFile("runs"));
+    nativeTheme.themeSource = savedTheme(); // before the window, so it opens in the right colours
     // Only the installed app claims char:// links; a dev build would otherwise steal them.
     if (app.isPackaged) app.setAsDefaultProtocolClient("char");
     app.setAboutPanelOptions({

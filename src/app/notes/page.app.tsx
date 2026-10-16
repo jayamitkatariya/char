@@ -8,13 +8,14 @@ import { setLinkState } from "@/components/app/linkStore";
 import { SettingsDialog } from "@/components/app/SettingsDialog";
 import { Sidebar, type View } from "@/components/app/Sidebar";
 import { MovePicker } from "@/components/app/MovePicker";
-import { HomeView, ListView, NoteView, type SaveState } from "@/components/app/Views";
+import { HomeView, ListView, NoteView, TrashView, type SaveState } from "@/components/app/Views";
 import { isConfigured, loadAISettings, saveAISettings, type AISettings } from "@/lib/ai";
 import { hasRunIn, isLongOutput, refreshAgentLabel, setRunFinisher, stopRunsOutside, type Run } from "@/lib/charlie";
 import { isDesktop, onMenu, onOpenLink, onUpdate, userName, type AgentEvent } from "@/lib/desktop";
 import { GITHUB_URL } from "@/lib/site";
+import { setThemeMode, startTheme } from "@/lib/theme";
 import type { Folder, Note } from "@/lib/types";
-import { DEFAULT_FOLDER, useWorkspace } from "@/lib/useWorkspace";
+import { DEFAULT_FOLDER, subpagesOf, useWorkspace } from "@/lib/useWorkspace";
 
 const SAVE_DELAY_MS = 500;
 const SAVE_MAX_WAIT_MS = 2000;
@@ -30,6 +31,7 @@ function viewFromUrl(): View {
   if (q.get("f")) return { kind: "folder", id: q.get("f")! };
   if (q.get("v") === "all") return { kind: "all" };
   if (q.get("v") === "pinned") return { kind: "pinned" };
+  if (q.get("v") === "trash") return { kind: "trash" };
   return { kind: "home" };
 }
 
@@ -41,6 +43,7 @@ function urlFor(v: View) {
       return `/notes?f=${v.id}`;
     case "all":
     case "pinned":
+    case "trash":
       return `/notes?v=${v.kind}`;
     default:
       return "/notes";
@@ -96,7 +99,9 @@ function Workspace() {
   const [settingsTab, setSettingsTab] = useState<null | "ai" | "agents" | "data" | "storage">(null);
   const [ai, setAI] = useState<AISettings | null>(() => loadAISettings(uid));
   const [pendingQuestion, setPendingQuestion] = useState<string | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
+  type Toast = { text: string; action?: { label: string; run: () => void }; at: number };
+  const [toast, setToastState] = useState<Toast | null>(null);
+  const setToast = useCallback((text: string | null, action?: Toast["action"]) => setToastState(text ? { text, action, at: Date.now() } : null), []);
   const [update, setUpdate] = useState<{ version: string; url: string } | null>(null);
 
   const pending = useRef(new Map<string, { patch: Partial<Note>; timer: ReturnType<typeof setTimeout>; since: number }>());
@@ -106,6 +111,8 @@ function Workspace() {
   const [canInsert, setCanInsert] = useState(false);
 
   /* ---------- boot ---------- */
+
+  useEffect(() => startTheme(), []);
 
   useEffect(() => {
     const mq = window.matchMedia("(max-width: 767px)");
@@ -122,16 +129,24 @@ function Workspace() {
     };
   }, []);
 
-  // Save failures surface as a toast too.
-  const shownToast = toast ?? ws.error;
+  // Save failures surface as a toast too. One with an Undo stays a little longer.
+  const shownToast: Toast | null = toast ?? (ws.error ? { text: ws.error, at: 0 } : null);
+  const clearError = useRef(ws.clearError);
+  useEffect(() => {
+    clearError.current = ws.clearError;
+  });
   useEffect(() => {
     if (!shownToast) return;
-    const t = setTimeout(() => {
-      setToast(null);
-      ws.clearError();
-    }, 2600);
+    const t = setTimeout(
+      () => {
+        setToastState(null);
+        clearError.current();
+      },
+      shownToast.action ? 6000 : 2600,
+    );
     return () => clearTimeout(t);
-  }, [shownToast, ws]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shownToast?.text, shownToast?.at]);
 
   /* ---------- lookups ---------- */
 
@@ -149,6 +164,27 @@ function Workspace() {
     [folderById],
   );
   const folderPath = useCallback((id: string) => chainOf(id).map((f) => f.name).join(" / ") || "Notes", [chainOf]);
+
+  const noteById = useMemo(() => new Map(notes.map((n) => [n.id, n])), [notes]);
+  /** The pages a subpage sits inside, outermost first. */
+  const pagesAbove = useCallback(
+    (n: Note) => {
+      const chain: Note[] = [];
+      let cur = n.parentId ? noteById.get(n.parentId) : undefined;
+      while (cur && chain.length < 64 && cur.id !== n.id) {
+        chain.unshift(cur);
+        cur = cur.parentId ? noteById.get(cur.parentId) : undefined;
+      }
+      return chain;
+    },
+    [noteById],
+  );
+  /** Where a note lives: its folder path, then the pages it sits inside. */
+  const notePath = useCallback(
+    (n: Note) => [folderPath(n.folderId), ...pagesAbove(n).map((p) => p.title.trim() || "Untitled")].join(" / "),
+    [folderPath, pagesAbove],
+  );
+  const isTopLevel = (n: Note) => !n.parentId || !noteById.has(n.parentId);
 
   const currentNote = view.kind === "note" ? (notes.find((n) => n.id === view.id) ?? null) : null;
   const activeFolderId = view.kind === "folder" ? view.id : (currentNote?.folderId ?? null);
@@ -262,11 +298,22 @@ function Workspace() {
       clearTimeout(entry.timer);
       pending.current.delete(id);
     }
-    const folderId = notes.find((n) => n.id === id)?.folderId;
+    const doomed = notes.find((n) => n.id === id);
+    const inside = doomed ? subpagesOf(notes, id) : new Set<string>();
     await ws.deleteNote(id);
-    // Deleting from the sidebar leaves you where you are, unless you were in that note.
-    if (view.kind === "note" && view.id === id) navigate(folderId && folderById.has(folderId) ? { kind: "folder", id: folderId } : { kind: "home" });
-    setToast("Note deleted");
+    // Deleting from the sidebar leaves you where you are, unless you were in that note (or a page inside it).
+    if (view.kind === "note" && (view.id === id || inside.has(view.id))) {
+      const parent = doomed?.parentId ? noteById.get(doomed.parentId) : undefined;
+      navigate(parent ? { kind: "note", id: parent.id } : doomed && folderById.has(doomed.folderId) ? { kind: "folder", id: doomed.folderId } : { kind: "home" });
+    }
+    const wasOpen = view.kind === "note" && (view.id === id || inside.has(view.id)) ? view.id : null;
+    setToast(inside.size ? `Moved to Trash with ${inside.size} page${inside.size === 1 ? "" : "s"} inside` : "Moved to Trash", {
+      label: "Undo",
+      run: async () => {
+        await ws.restoreNote(id);
+        if (wasOpen) navigate({ kind: "note", id: wasOpen });
+      },
+    });
   };
 
   const togglePin = (id: string) => {
@@ -276,10 +323,28 @@ function Workspace() {
     setToast(note.pinned ? "Unpinned" : "Pinned");
   };
 
-  const moveNote = (id: string, folderId: string) => {
-    if (notes.find((n) => n.id === id)?.folderId === folderId) return;
-    saveNow(id, { folderId });
+  // To the top level of a folder.
+  const moveNote = async (id: string, folderId: string) => {
+    const n = noteById.get(id);
+    if (!n || (n.folderId === folderId && isTopLevel(n))) return;
+    await ws.moveNote(id, { folderId });
     setToast(`Moved to ${folderPath(folderId)}`);
+  };
+
+  // Inside another page.
+  const nestNote = async (id: string, parentId: string) => {
+    const parent = noteById.get(parentId);
+    if (!parent || id === parentId || noteById.get(id)?.parentId === parentId || subpagesOf(notes, id).has(parentId)) return;
+    await ws.moveNote(id, { parentId });
+    setToast(`Moved into “${parent.title.trim() || "Untitled"}”`);
+  };
+
+  const createSubpage = async (parentId: string, open = true) => {
+    const parent = ws.getNote(parentId);
+    if (!parent) throw new Error("That page is gone");
+    const note = await ws.createNote(parent.folderId, { parentId });
+    if (open) navigate({ kind: "note", id: note.id });
+    return note;
   };
 
   const duplicateNote = async (id: string) => {
@@ -308,8 +373,9 @@ function Workspace() {
     discardIfEmpty.current = (id) => {
       const n = ws.getNote(id);
       if (!n || pending.current.has(id) || n.title.trim() || n.content.trim() || n.pinned || hasRunIn(id)) return;
-      if (ws.notes.some((o) => o.links?.includes(id))) return;
-      ws.deleteNote(id).catch(() => {});
+      // Kept while another note points at it (an @-link or a /page row) or it holds pages of its own.
+      if (ws.notes.some((o) => o.links?.includes(id) || o.parentId === id)) return;
+      ws.purgeNote(id).catch(() => {}); // not worth a place in the Trash
     };
   });
   useEffect(() => {
@@ -329,8 +395,10 @@ function Workspace() {
   };
 
   const deleteFolder = async (id: string) => {
+    const name = folderById.get(id)?.name ?? "Folder";
     if (activeFolderId && chainOf(activeFolderId).some((f) => f.id === id)) navigate({ kind: "home" });
-    await ws.deleteFolder(id);
+    const undo = await ws.deleteFolder(id);
+    setToast(`Deleted “${name}”; its notes are in the Trash`, { label: "Undo", run: () => void ws.undoDeleteFolder(undo) });
   };
 
   /* ---------- AI ---------- */
@@ -417,7 +485,7 @@ function Workspace() {
       else if (e.type === "error") setToast(`charlie couldn't finish${where}`);
     };
   });
-  useEffect(() => setRunFinisher((run, e) => void finishRun.current(run, e).catch((err: Error) => setToast(`charlie: ${err.message}`))), []);
+  useEffect(() => setRunFinisher((run, e) => void finishRun.current(run, e).catch((err: Error) => setToast(`charlie: ${err.message}`))), [setToast]);
   useEffect(() => {
     refreshAgentLabel();
   }, []);
@@ -436,6 +504,7 @@ function Workspace() {
       else if (action === "ask") setChatOpen((c) => !c);
       else if (action === "toggle-sidebar") setSidebarOpen((s) => !s);
       else if (action === "home") navigate({ kind: "home" });
+      else if (action.startsWith("theme-")) setThemeMode(action.slice(6) as "system" | "light" | "dark");
     };
   });
   useEffect(() => onMenu((a) => menuAction.current(a)), []);
@@ -510,7 +579,10 @@ function Workspace() {
         notes={notes}
         folders={folders}
         chain={chainOf(currentNote.folderId)}
+        pages={pagesAbove(currentNote)}
+        subpages={notes.filter((n) => n.parentId === currentNote.id).sort((a, b) => a.createdAt.localeCompare(b.createdAt))}
         folderPath={folderPath}
+        notePath={notePath}
         saveState={ws.error ? "error" : saveState}
         bar={bar}
         onNavigate={navigate}
@@ -521,6 +593,7 @@ function Workspace() {
         onCopyLink={() => copyLink(currentNote.id)}
         onDelete={() => deleteNote(currentNote.id)}
         onCreateNote={(title) => createNote(currentNote.folderId, title, false)}
+        onCreateSubpage={(open) => createSubpage(currentNote.id, open)}
         registerInsert={registerInsert}
         onToast={setToast}
       />
@@ -535,8 +608,9 @@ function Workspace() {
         folder={folder}
         chain={chainOf(folder.id)}
         subfolders={folders.filter((f) => f.parentId === folder.id).sort((a, b) => a.name.localeCompare(b.name))}
-        notes={notes.filter((n) => n.folderId === folder.id)}
+        notes={notes.filter((n) => n.folderId === folder.id && isTopLevel(n))}
         folderPath={folderPath}
+        notePath={notePath}
         bar={bar}
         onNavigate={navigate}
         onNewNote={() => createNote(folder.id)}
@@ -554,9 +628,24 @@ function Workspace() {
         subfolders={view.kind === "all" ? folders.filter((f) => !f.parentId).sort((a, b) => a.name.localeCompare(b.name)) : []}
         notes={view.kind === "all" ? notes : notes.filter((n) => n.pinned)}
         folderPath={folderPath}
+        notePath={notePath}
         bar={bar}
         onNavigate={navigate}
         onNewNote={() => createNote()}
+      />
+    );
+  } else if (view.kind === "trash") {
+    main = (
+      <TrashView
+        trash={ws.trash}
+        notePath={(n) => (folderById.has(n.folderId) ? folderPath(n.folderId) : "Deleted folder")}
+        bar={bar}
+        onRestore={async (id) => {
+          await ws.restoreNote(id);
+          setToast("Restored", { label: "Open", run: () => navigate({ kind: "note", id }) });
+        }}
+        onPurge={(id) => void ws.purgeNote(id)}
+        onEmpty={() => void ws.emptyTrash()}
       />
     );
   } else {
@@ -564,7 +653,7 @@ function Workspace() {
       <HomeView
         username={username}
         notes={notes}
-        folderPath={folderPath}
+        notePath={notePath}
         aiReady={aiReady}
         bar={bar}
         onNavigate={navigate}
@@ -578,7 +667,7 @@ function Workspace() {
   return (
     <div className="flex h-dvh overflow-hidden bg-[var(--paper)]">
       {/* Sidebar: docked on desktop, a drawer on phones */}
-      {sidebarOpen && isMobile && <div className="fixed inset-0 z-30 bg-[rgba(43,38,32,0.2)]" onClick={() => setSidebarOpen(false)} />}
+      {sidebarOpen && isMobile && <div className="scrim fixed inset-0 z-30" onClick={() => setSidebarOpen(false)} />}
       <div
         className={`hairline-r z-40 h-full w-[268px] shrink-0 transition-[margin,transform] duration-200 ease-out ${
           isMobile ? `fixed inset-y-0 left-0 shadow-[var(--shadow-lg)] ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}` : sidebarOpen ? "" : "-ml-[268px]"
@@ -603,6 +692,9 @@ function Workspace() {
           onCopyLink={copyLink}
           onPickFolder={setMoving}
           onDeleteNote={deleteNote}
+          onNewSubpage={(id) => void createSubpage(id)}
+          onNestNote={nestNote}
+          trashCount={ws.trash.filter((n) => !ws.trash.some((t) => t.id === n.parentId && t.deletedAt === n.deletedAt)).length}
           onSearch={() => setPalette(true)}
           onAsk={() => ask()}
           onSettings={() => setSettingsTab("ai")}
@@ -641,6 +733,7 @@ function Workspace() {
           notes={notes}
           folders={folders}
           folderPath={folderPath}
+          notePath={notePath}
           onClose={() => setPalette(false)}
           onNavigate={navigate}
           onNewNote={(title) => createNote(undefined, title ?? "")}
@@ -651,19 +744,23 @@ function Workspace() {
           current={currentNote ? { title: currentNote.title, pinned: currentNote.pinned } : null}
           onTogglePin={() => currentNote && togglePin(currentNote.id)}
           onMoveNote={() => currentNote && setMoving(currentNote.id)}
+          onNewSubpage={() => currentNote && void createSubpage(currentNote.id)}
         />
       )}
 
-      {moving && notes.some((n) => n.id === moving) && (
+      {moving && noteById.has(moving) && (
         <MovePicker
-          noteTitle={notes.find((n) => n.id === moving)!.title}
+          note={noteById.get(moving)!}
           folders={folders}
-          currentFolderId={notes.find((n) => n.id === moving)!.folderId}
+          pages={notes.filter((n) => n.id !== moving && !subpagesOf(notes, moving).has(n.id) && n.id !== noteById.get(moving)!.parentId)}
+          isTopLevel={isTopLevel(noteById.get(moving)!)}
           folderPath={folderPath}
-          onPick={(folderId) => moveNote(moving, folderId)}
+          notePath={notePath}
+          onPickFolder={(folderId) => moveNote(moving, folderId)}
+          onPickPage={(pageId) => nestNote(moving, pageId)}
           onCreate={async (name) => {
             const f = await ws.createFolder(name, null);
-            saveNow(moving, { folderId: f.id });
+            await ws.moveNote(moving, { folderId: f.id });
             setToast(`Moved to ${name}`);
           }}
           onClose={() => setMoving(null)}
@@ -697,8 +794,23 @@ function Workspace() {
       )}
 
       {shownToast && (
-        <div className="pop-in fixed bottom-5 left-1/2 z-[60] -translate-x-1/2 rounded-full bg-[var(--accent)] px-4 py-2 text-[13px] text-white shadow-[var(--shadow-lg)]">
-          {shownToast}
+        <div
+          key={shownToast.at}
+          role="status"
+          className="pop-in fixed bottom-5 left-1/2 z-[60] flex -translate-x-1/2 items-center gap-3 rounded-full bg-[var(--accent)] px-4 py-2 text-[13px] text-[var(--on-accent)] shadow-[var(--shadow-lg)]"
+        >
+          <span>{shownToast.text}</span>
+          {shownToast.action && (
+            <button
+              className="-my-1 -mr-2 rounded-full px-2.5 py-1 font-medium underline-offset-2 hover:underline"
+              onClick={() => {
+                shownToast.action?.run();
+                setToastState(null);
+              }}
+            >
+              {shownToast.action.label}
+            </button>
+          )}
         </div>
       )}
     </div>

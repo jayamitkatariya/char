@@ -19,25 +19,32 @@ import { newId } from "@/lib/useWorkspace";
 import { IconFolder, IconNote, IconPlus, IconTerminal, IconWand } from "../icons";
 import { charlieTask, findRun, registerRunActions, schema, type CharEditor } from "./editorSchema";
 import { registerEditor } from "./editorRegistry";
-import { collectLinks, type LinkKind } from "./linkStore";
+import { collectLinks, openLink, type LinkKind } from "./linkStore";
 import { tidy } from "./tidy";
 
-const theme: Theme = {
+// Built from char's CSS variables, so one theme serves light and dark (globals.css sets both).
+// BlockNote picks the light or dark entry from prefers-color-scheme, which the Mac app keeps in
+// step with char's own setting; that also switches its Mantine menus.
+const charTheme: Theme = {
   colors: {
-    editor: { text: "#2b2620", background: "transparent" },
-    menu: { text: "#2b2620", background: "#ffffff" },
-    tooltip: { text: "#ffffff", background: "#2e2a23" },
-    hovered: { text: "#2b2620", background: "#f7f5f0" },
-    selected: { text: "#2b2620", background: "#efece5" },
-    disabled: { text: "#a29c92", background: "#f7f5f0" },
-    shadow: "rgba(43, 38, 32, 0.14)",
-    border: "rgba(43, 38, 32, 0.09)",
-    sideMenu: "#b8b2a8",
-    highlights: { yellow: { text: "#2b2620", background: "#fdeec0" }, green: { text: "#2b2620", background: "#d9ead0" } },
+    editor: { text: "var(--ink)", background: "transparent" },
+    menu: { text: "var(--ink)", background: "var(--card)" },
+    tooltip: { text: "var(--on-accent)", background: "var(--accent)" },
+    hovered: { text: "var(--ink)", background: "var(--paper-2)" },
+    selected: { text: "var(--ink)", background: "var(--paper-3)" },
+    disabled: { text: "var(--ink-faint)", background: "var(--paper-2)" },
+    shadow: "var(--scrim)",
+    border: "var(--hairline)",
+    sideMenu: "var(--ink-faint)",
+    highlights: {
+      yellow: { text: "var(--ink)", background: "var(--highlight)" },
+      green: { text: "var(--ink)", background: "var(--highlight-green)" },
+    },
   },
   borderRadius: 10,
   fontFamily: "var(--font-sans), ui-sans-serif, system-ui, sans-serif",
 };
+const theme = { light: charTheme, dark: charTheme };
 
 export type EditorChange = { content: string; blocks: string; links: string[] };
 
@@ -50,12 +57,14 @@ type Props = {
   folderPath: (id: string) => string;
   onChange: (change: EditorChange) => void;
   onCreateNote: (title: string) => Note | Promise<Note>;
+  /** Makes an empty page inside this one (for /page). */
+  onCreateSubpage: () => Promise<Note>;
   onToast: (msg: string) => void;
   /** Lets the parent push text in (e.g. "insert AI answer"). */
   registerInsert?: (fn: ((markdown: string) => void) | null) => void;
 };
 
-export default function Editor({ note, notes, folders, folderPath, onChange, onCreateNote, onToast, registerInsert }: Props) {
+export default function Editor({ note, notes, folders, folderPath, onChange, onCreateNote, onCreateSubpage, onToast, registerInsert }: Props) {
   const initial = useMemo(() => {
     if (!note.blocks) return undefined;
     try {
@@ -341,9 +350,28 @@ export default function Editor({ note, notes, folders, folderPath, onChange, onC
     return [...agent, ...noteItems, ...folderItems, ...create];
   };
 
+  // /page: a new page inside this one, left behind as a row, then opened.
+  const addSubpage = async () => {
+    const at = editor.getTextCursorPosition().block;
+    const child = await onCreateSubpage();
+    const row = { type: "subpage" as const, props: { pageId: child.id, title: child.title } };
+    const empty = at.type === "paragraph" && Array.isArray(at.content) && at.content.length === 0;
+    if (empty) editor.replaceBlocks([at], [row]);
+    else editor.insertBlocks([row], at, "after");
+    openLink("note", child.id);
+  };
+
   const getSlashItems = async (query: string) =>
     filterSuggestionItems(
       [
+        {
+          title: "Page",
+          subtext: "A new page inside this one",
+          aliases: ["page", "subpage", "new page", "child", "nest"],
+          group: "char",
+          icon: <IconNote size={18} />,
+          onItemClick: () => void addSubpage(),
+        },
         {
           title: "Tidy into to-dos",
           subtext: "Turn loose lines into checklists and bullets (⌘⇧T)",

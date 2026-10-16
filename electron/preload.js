@@ -22,6 +22,8 @@ contextBridge.exposeInMainWorld("char", {
   load: () => ipcRenderer.invoke("workspace:load"),
   save: (data) => ipcRenderer.invoke("workspace:save", data),
   revealData: () => ipcRenderer.send("workspace:reveal"),
+  theme: info.theme,
+  setTheme: (theme) => ipcRenderer.invoke("theme:set", theme),
 
   onMenu: (cb) => listen("char:menu", cb),
   onOpen: (cb) => {

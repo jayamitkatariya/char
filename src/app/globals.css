@@ -23,7 +23,60 @@
   --shadow-sm: 0 1px 2px rgba(43, 38, 32, 0.06);
   --shadow: 0 1px 2px rgba(43, 38, 32, 0.05), 0 12px 32px -8px rgba(43, 38, 32, 0.16);
   --shadow-lg: 0 2px 4px rgba(43, 38, 32, 0.04), 0 30px 70px -20px rgba(43, 38, 32, 0.3);
+  --hairline-strong: rgba(43, 38, 32, 0.22);
+  --on-accent: #ffffff;
+  --scrim: rgba(43, 38, 32, 0.18);
+  --grid-line: rgba(43, 38, 32, 0.045);
+  --scroll-thumb: rgba(43, 38, 32, 0.15);
+  --focus-ring: rgba(43, 38, 32, 0.06);
+  --check-border: #b8b2a8;
+  --danger-bg: #fdecea;
+  --danger-ink: #9a3412;
+  --success: #3f7a3a;
+  --link-underline: rgba(61, 95, 147, 0.35);
   color-scheme: light;
+}
+
+/* Dark: warm charcoal paper, cream ink. The notepad sets data-theme on <html> (System follows macOS). */
+:root[data-theme="dark"] {
+  --paper: #1b1915;
+  --paper-2: #22201b;
+  --paper-3: #2b2822;
+  --card: #262320;
+  --ink: #ece6dc;
+  --ink-soft: #ada597;
+  --ink-faint: #7a7368;
+  --hairline: rgba(236, 230, 220, 0.09);
+  --hover: rgba(236, 230, 220, 0.055);
+  --selected: rgba(236, 230, 220, 0.09);
+  --accent: #ece6dc;
+  --highlight: rgba(245, 190, 70, 0.26);
+  --highlight-green: rgba(120, 180, 100, 0.24);
+  --link: #8fb0e3;
+  --danger: #f08a5d;
+  --sun: #fbbf24;
+  --rule: rgba(140, 170, 225, 0.12);
+  --margin-red: rgba(226, 104, 104, 0.35);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 32px -8px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 2px 4px rgba(0, 0, 0, 0.3), 0 30px 70px -20px rgba(0, 0, 0, 0.7);
+  --hairline-strong: rgba(236, 230, 220, 0.24);
+  --on-accent: #1b1915;
+  --scrim: rgba(0, 0, 0, 0.45);
+  --grid-line: rgba(236, 230, 220, 0.04);
+  --scroll-thumb: rgba(236, 230, 220, 0.16);
+  --focus-ring: rgba(236, 230, 220, 0.08);
+  --check-border: #6f685d;
+  --danger-bg: rgba(240, 138, 93, 0.14);
+  --danger-ink: #f5a47e;
+  --success: #8cc084;
+  --link-underline: rgba(143, 176, 227, 0.4);
+  color-scheme: dark;
+}
+
+.scrim {
+  background: var(--scrim);
+  backdrop-filter: blur(2px);
 }
 
 html,
@@ -83,8 +136,8 @@ body {
 /* Graph-paper grid that fades out toward the edges */
 .paper-grid {
   background-image:
-    linear-gradient(to right, rgba(43, 38, 32, 0.045) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(43, 38, 32, 0.045) 1px, transparent 1px);
+    linear-gradient(to right, var(--grid-line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px);
   background-size: 14px 14px;
   -webkit-mask-image: radial-gradient(ellipse 75% 65% at 50% 40%, #000 30%, transparent 100%);
   mask-image: radial-gradient(ellipse 75% 65% at 50% 40%, #000 30%, transparent 100%);
@@ -119,11 +172,11 @@ body {
 }
 .btn-primary {
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
   border-color: transparent;
 }
 .btn-primary:hover:not(:disabled) {
-  box-shadow: 0 8px 20px -8px rgba(46, 42, 35, 0.6);
+  box-shadow: 0 8px 20px -8px var(--scrim);
 }
 .btn-ghost {
   background: transparent;
@@ -174,8 +227,8 @@ body {
   color: var(--ink-faint);
 }
 .input:focus {
-  border-color: rgba(43, 38, 32, 0.3);
-  box-shadow: 0 0 0 3px rgba(43, 38, 32, 0.06);
+  border-color: var(--hairline-strong);
+  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
 .field {
@@ -242,7 +295,7 @@ body {
 
 .scroll-soft {
   scrollbar-width: thin;
-  scrollbar-color: rgba(43, 38, 32, 0.15) transparent;
+  scrollbar-color: var(--scroll-thumb) transparent;
 }
 
 .fade-in {
@@ -302,17 +355,17 @@ body {
 .char-editor .bn-editor {
   --bn-colors-editor-background: transparent;
   --bn-colors-editor-text: var(--ink);
-  --bn-colors-menu-background: #fff;
+  --bn-colors-menu-background: var(--card);
   --bn-colors-menu-text: var(--ink);
   --bn-colors-tooltip-background: var(--accent);
-  --bn-colors-tooltip-text: #fff;
+  --bn-colors-tooltip-text: var(--on-accent);
   --bn-colors-hovered-background: var(--paper-2);
   --bn-colors-hovered-text: var(--ink);
   --bn-colors-selected-background: var(--paper-3);
   --bn-colors-selected-text: var(--ink);
   --bn-colors-disabled-background: var(--paper-2);
   --bn-colors-disabled-text: var(--ink-faint);
-  --bn-colors-shadow: rgba(43, 38, 32, 0.12);
+  --bn-colors-shadow: var(--scrim);
   --bn-colors-border: var(--hairline);
   --bn-colors-side-menu: var(--ink-faint);
   --bn-colors-highlights-yellow-background: var(--highlight);
@@ -342,7 +395,7 @@ body {
   color: var(--link);
   text-decoration: underline;
   text-underline-offset: 3px;
-  text-decoration-color: rgba(61, 95, 147, 0.35);
+  text-decoration-color: var(--link-underline);
 }
 
 /* @-links between notes and folders */
@@ -365,6 +418,41 @@ body {
 }
 .note-link[data-missing="true"] {
   color: var(--ink-faint);
+  text-decoration: line-through;
+}
+
+/* /page: a subpage row inside its parent, like Notion's page blocks */
+.page-block {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 3px 6px;
+  margin: 1px 0;
+  border-radius: 8px;
+  color: var(--ink);
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 120ms ease;
+}
+.page-block svg {
+  flex-shrink: 0;
+  color: var(--ink-soft);
+}
+.page-block-title {
+  font-weight: 500;
+  text-decoration: underline;
+  text-decoration-color: var(--hairline-strong);
+  text-underline-offset: 4px;
+}
+.page-block:hover {
+  background: var(--hover);
+}
+.page-block[data-missing="true"] {
+  color: var(--ink-faint);
+  cursor: default;
+}
+.page-block[data-missing="true"] .page-block-title {
   text-decoration: line-through;
 }
 
@@ -467,7 +555,7 @@ html[data-fullscreen] .lights-left {
   font-family: var(--font-mono), ui-monospace, monospace;
   font-size: 0.86em;
   font-weight: 700;
-  color: #fff;
+  color: var(--on-accent);
   background: var(--accent);
   line-height: 1.5;
   user-select: none;
@@ -479,7 +567,7 @@ html[data-fullscreen] .lights-left {
   border-radius: 14px;
   border: 1px solid var(--hairline);
   background: var(--card);
-  box-shadow: 0 1px 2px rgba(43, 38, 32, 0.05);
+  box-shadow: var(--shadow-sm);
   font-size: 14px;
 }
 .charlie-card[data-state="running"] {
@@ -490,7 +578,7 @@ html[data-fullscreen] .lights-left {
   animation: charlie-sheen 2.4s linear infinite;
 }
 .charlie-card[data-state="error"] {
-  border-color: rgba(194, 65, 12, 0.3);
+  border-color: color-mix(in srgb, var(--danger) 35%, transparent);
 }
 .charlie-badge {
   display: inline-flex;
@@ -499,7 +587,7 @@ html[data-fullscreen] .lights-left {
   padding: 1px 8px 1px 6px;
   border-radius: 999px;
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
   font-family: var(--font-mono), ui-monospace, monospace;
   font-size: 11.5px;
   font-weight: 700;
@@ -680,7 +768,7 @@ html[data-fullscreen] .lights-left {
   height: 17px;
   margin: 0 10px 0 2px;
   border-radius: 5px;
-  border: 1.5px solid #b8b2a8;
+  border: 1.5px solid var(--check-border);
   background: var(--card);
   display: inline-grid;
   place-content: center;
@@ -702,8 +790,8 @@ html[data-fullscreen] .lights-left {
   width: 9px;
   height: 5px;
   margin-top: -2px;
-  border-left: 2px solid #fff;
-  border-bottom: 2px solid #fff;
+  border-left: 2px solid var(--on-accent);
+  border-bottom: 2px solid var(--on-accent);
   transform: rotate(-45deg) scale(0);
   transition: transform 140ms ease;
 }
@@ -713,5 +801,5 @@ html[data-fullscreen] .lights-left {
 .char-editor [data-content-type="checkListItem"][data-checked="true"] .bn-inline-content {
   color: var(--ink-faint);
   text-decoration: line-through;
-  text-decoration-color: rgba(43, 38, 32, 0.3);
+  text-decoration-color: var(--hairline-strong);
 }

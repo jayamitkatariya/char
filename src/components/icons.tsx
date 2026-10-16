@@ -67,6 +67,17 @@ export const IconForward = (p: IconProps) => (
     <path d="m9 6 6 6-6 6" />
   </Svg>
 );
+export const IconMoon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z" />
+  </Svg>
+);
+export const IconMonitor = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="3" y="4" width="18" height="12" rx="2" />
+    <path d="M8 20h8M12 16v4" />
+  </Svg>
+);
 export const IconCollapse = (p: IconProps) => (
   <Svg {...p}>
     <path d="m7 4 5 5 5-5M7 20l5-5 5 5" />
