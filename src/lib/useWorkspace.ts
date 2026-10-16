@@ -19,8 +19,11 @@ const WELCOME = `Everything you write here is saved on this Mac as you type.
 ## The basics
 
 - Type **/** for headings, checklists, tables, quotes and code.
+- Type **/page** for a page inside this one. Pages can hold pages, as deep as you like.
 - Type **@** to link another note or folder. Linked notes show this one under *Linked from*.
-- Press **⌘K** to jump to anything, **⌘N** for a new note.
+- Press **⌘K** to jump to anything, **⌘N** for a new note, **⌘F** to find in a note, **⌘/** for every shortcut.
+- Hover the title to give a page an icon. Right-click anything in the sidebar for more.
+- Every checklist shows up in **Tasks**. Deleted notes wait in the **Trash** for 30 days.
 - Drag the handle on the left of a block to move it.
 
 - Press **⌘⇧T** to tidy loose lines into to-dos and bullets. Try it on the lines below.

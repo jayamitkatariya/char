@@ -2,6 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { allTasks, tasksIn } from "@/lib/tasks";
 import type { Folder, Note } from "@/lib/types";
 import {
   IconBack,
@@ -23,6 +24,7 @@ import {
 } from "../icons";
 import type { EditorChange } from "./Editor";
 import { plainText } from "./Markdown";
+import { IconPicker, NoteIcon } from "./NoteIcon";
 import { Menu, MenuItem, MenuSep, type View } from "./Sidebar";
 
 // BlockNote touches the DOM on import; load it only in the browser.
@@ -110,7 +112,7 @@ export function TopBar({
 export function Crumbs({ chain, pages = [], onNavigate, tail }: { chain: Folder[]; pages?: Note[]; onNavigate: (v: View) => void; tail?: string }) {
   const steps = [
     ...chain.map((f) => ({ id: f.id, label: f.name, view: { kind: "folder", id: f.id } as View })),
-    ...pages.map((n) => ({ id: n.id, label: n.title.trim() || "Untitled", view: { kind: "note", id: n.id } as View })),
+    ...pages.map((n) => ({ id: n.id, label: `${n.icon ? `${n.icon} ` : ""}${n.title.trim() || "Untitled"}`, view: { kind: "note", id: n.id } as View })),
   ];
   return (
     <nav className="flex min-w-0 items-center gap-1" aria-label="Breadcrumb">
@@ -146,7 +148,10 @@ export function NoteCard({ note, path, onOpen }: { note: Note; path?: string; on
   return (
     <button onClick={onOpen} className="card group flex h-full flex-col p-4 text-left transition-transform duration-200 hover:-translate-y-0.5">
       <div className="flex items-start gap-2">
-        <h3 className="font-serif line-clamp-2 flex-1 text-[17px] font-semibold leading-snug">{note.title.trim() || "Untitled"}</h3>
+        <h3 className="font-serif line-clamp-2 flex-1 text-[17px] font-semibold leading-snug">
+          {note.icon && <span className="mr-1.5 font-sans">{note.icon}</span>}
+          {note.title.trim() || "Untitled"}
+        </h3>
         {note.pinned && (
           <span className="mt-1 text-[var(--ink-faint)]">
             <IconPin size={13} />
@@ -182,6 +187,7 @@ type NoteViewProps = {
   onTitle: (title: string) => void;
   onEditorChange: (c: EditorChange) => void;
   onTogglePin: () => void;
+  onIcon: (icon: string) => void;
   onPickFolder: () => void;
   onCopyLink: () => void;
   onDelete: () => void;
@@ -195,11 +201,14 @@ export function NoteView(p: NoteViewProps) {
   const { note } = p;
   const [title, setTitle] = useState(note.title);
   const [menu, setMenu] = useState(false);
+  const [picking, setPicking] = useState(false);
   const titleRef = useRef<HTMLTextAreaElement>(null);
 
-  // A brand-new note starts with the cursor in the title.
+  // A brand-new note starts with the cursor in the title, or in the body when it already has one
+  // (made from ⌘K or an @-link).
+  const [fresh] = useState(() => !note.content.trim());
   useEffect(() => {
-    if (!note.title && !note.content) titleRef.current?.focus();
+    if (fresh && !note.title) titleRef.current?.focus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -280,7 +289,41 @@ export function NoteView(p: NoteViewProps) {
       </TopBar>
 
       <div className="scroll-soft min-h-0 flex-1 overflow-y-auto">
-        <article className="fade-in mx-auto w-full max-w-[760px] px-6 pb-40 pt-10 sm:px-16 sm:pt-16">
+        <article className="fade-in group/page mx-auto w-full max-w-[760px] px-6 pb-40 pt-10 sm:px-16 sm:pt-16">
+          {/* The page's emoji, or an "Add icon" button that shows on hover, like Notion. */}
+          <div className="relative mb-2">
+            {note.icon ? (
+              <button
+                className="row -ml-1 flex h-[64px] w-[64px] items-center justify-center text-[48px] leading-none"
+                title="Change icon"
+                aria-label="Change icon"
+                onClick={() => setPicking((v) => !v)}
+              >
+                {note.icon}
+              </button>
+            ) : (
+              <button
+                className={`btn btn-ghost btn-sm -ml-2 text-[var(--ink-faint)] transition-opacity ${picking ? "opacity-100" : "opacity-0 focus:opacity-100 group-hover/page:opacity-100"}`}
+                onClick={() => setPicking((v) => !v)}
+              >
+                <NoteIcon size={14} /> Add icon
+              </button>
+            )}
+            {picking && (
+              <IconPicker
+                hasIcon={!!note.icon}
+                onPick={(e) => {
+                  p.onIcon(e);
+                  setPicking(false);
+                }}
+                onRemove={() => {
+                  p.onIcon("");
+                  setPicking(false);
+                }}
+                onClose={() => setPicking(false)}
+              />
+            )}
+          </div>
           <textarea
             ref={titleRef}
             rows={1}
@@ -321,6 +364,7 @@ export function NoteView(p: NoteViewProps) {
             onChange={p.onEditorChange}
             onCreateNote={p.onCreateNote}
             onCreateSubpage={() => p.onCreateSubpage(false)}
+            autoFocus={fresh && !!note.title}
             registerInsert={p.registerInsert}
             onToast={p.onToast}
           />
@@ -333,7 +377,7 @@ export function NoteView(p: NoteViewProps) {
               <div className="-mx-1.5">
                 {unlisted.map((n) => (
                   <button key={n.id} className="page-block" onClick={() => p.onNavigate({ kind: "note", id: n.id })}>
-                    <IconNote size={16} />
+                    <NoteIcon icon={n.icon} size={16} />
                     <span className="page-block-title">{n.title.trim() || "Untitled"}</span>
                   </button>
                 ))}
@@ -510,7 +554,7 @@ export function HomeView(p: HomeViewProps) {
   const recent = useMemo(() => [...p.notes].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 9), [p.notes]);
   const weekAgo = hello.now - 7 * 86400 * 1000;
   const touched = p.notes.filter((n) => Date.parse(n.updatedAt) > weekAgo).length;
-  const openTasks = p.notes.reduce((sum, n) => sum + (n.content.match(/^\s*[-*] \[ \]/gm)?.length ?? 0), 0);
+  const openTasks = useMemo(() => allTasks(p.notes).filter((t) => !t.checked).length, [p.notes]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -534,7 +578,10 @@ export function HomeView(p: HomeViewProps) {
                 {openTasks > 0 && (
                   <>
                     {" "}
-                    and have <span className="mark">{openTasks} open {openTasks === 1 ? "to-do" : "to-dos"}</span>
+                    and have{" "}
+                    <button className="mark cursor-pointer hover:underline" onClick={() => p.onNavigate({ kind: "tasks" })}>
+                      {openTasks} open {openTasks === 1 ? "to-do" : "to-dos"}
+                    </button>
                   </>
                 )}
                 .
@@ -652,7 +699,7 @@ export function TrashView(p: TrashViewProps) {
                 return (
                   <li key={n.id} className="flex items-center gap-3 px-4 py-3">
                     <span className="text-[var(--ink-faint)]">
-                      <IconNote size={16} />
+                      <NoteIcon icon={n.icon} size={16} />
                     </span>
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-[14.5px] font-medium">{n.title.trim() || "Untitled"}</div>
@@ -676,6 +723,102 @@ export function TrashView(p: TrashViewProps) {
                 );
               })}
             </ul>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- every to-do, across notes ---------- */
+
+type TasksViewProps = {
+  notes: Note[];
+  notePath: (n: Note) => string;
+  bar: Omit<React.ComponentProps<typeof TopBar>, "children" | "actions">;
+  onNavigate: (v: View) => void;
+  onToggle: (noteId: string, blockId: string, checked: boolean) => void;
+};
+
+export function TasksView(p: TasksViewProps) {
+  const [showDone, setShowDone] = useState(false);
+  // Ticked here, so they stay in view (struck through) instead of vanishing under the cursor.
+  const [justDone, setJustDone] = useState<Set<string>>(() => new Set());
+  const groups = useMemo(
+    () =>
+      [...p.notes]
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+        .map((n) => ({ note: n, tasks: tasksIn(n).filter((t) => showDone || !t.checked || (t.blockId && justDone.has(t.blockId))) }))
+        .filter((g) => g.tasks.length),
+    [p.notes, showDone, justDone],
+  );
+  const open = useMemo(() => allTasks(p.notes).filter((t) => !t.checked).length, [p.notes]);
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <TopBar {...p.bar}>
+        <span className="px-1.5 text-[var(--ink)]">Tasks</span>
+      </TopBar>
+      <div className="scroll-soft min-h-0 flex-1 overflow-y-auto">
+        <div className="fade-in mx-auto w-full max-w-[860px] px-6 pb-24 pt-10 sm:px-12 sm:pt-14">
+          <p className="label">
+            {open} open {open === 1 ? "to-do" : "to-dos"} across your notes
+          </p>
+          <div className="mt-1 flex items-center gap-3">
+            <h1 className="font-serif flex-1 text-[38px] font-semibold tracking-tight sm:text-[46px]">Tasks</h1>
+            <label className="flex cursor-pointer items-center gap-2 text-[13px] text-[var(--ink-soft)]">
+              <input type="checkbox" className="accent-[var(--accent)]" checked={showDone} onChange={(e) => setShowDone(e.target.checked)} />
+              Show done
+            </label>
+          </div>
+          {groups.length === 0 ? (
+            <div className="mt-16 text-center">
+              <p className="font-hand -rotate-2 text-[28px] text-[var(--ink-soft)]">all clear</p>
+              <p className="mt-2 text-[14px] text-[var(--ink-soft)]">
+                Checklists from every note show up here. Type <span className="kbd">[] </span> or <span className="kbd">todo: </span> in a note, or tidy loose lines with{" "}
+                <span className="kbd">⌘⇧T</span>.
+              </p>
+            </div>
+          ) : (
+            <div className="mt-8 space-y-6">
+              {groups.map(({ note, tasks }) => (
+                <section key={note.id}>
+                  <button
+                    className="row -ml-2 flex max-w-full items-center gap-2 px-2 py-1 text-left"
+                    onClick={() => p.onNavigate({ kind: "note", id: note.id })}
+                  >
+                    <NoteIcon icon={note.icon} size={15} className="text-[var(--ink-soft)]" />
+                    <span className="truncate text-[14.5px] font-semibold">{note.title.trim() || "Untitled"}</span>
+                    <span className="label truncate">{p.notePath(note).toLowerCase()}</span>
+                  </button>
+                  <ul className="mt-1">
+                    {tasks.map((t, i) => (
+                      <li key={t.blockId ?? i} className="flex items-start gap-2.5 py-1 pl-1">
+                        <input
+                          type="checkbox"
+                          className="task-box"
+                          checked={t.checked}
+                          disabled={!t.blockId}
+                          title={t.blockId ? undefined : "Open the note to tick this one"}
+                          aria-label={t.text}
+                          onChange={(e) => {
+                            if (!t.blockId) return;
+                            if (e.target.checked) setJustDone((s) => new Set(s).add(t.blockId!));
+                            p.onToggle(note.id, t.blockId, e.target.checked);
+                          }}
+                        />
+                        <button
+                          className={`min-w-0 flex-1 text-left text-[15px] leading-relaxed ${t.checked ? "text-[var(--ink-faint)] line-through" : ""}`}
+                          onClick={() => p.onNavigate({ kind: "note", id: note.id })}
+                        >
+                          {t.text}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              ))}
+            </div>
           )}
         </div>
       </div>

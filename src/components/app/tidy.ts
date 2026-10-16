@@ -81,7 +81,12 @@ export function looksLikeTask(text: string) {
   if (!t || t.length > 140 || /\?$/.test(t)) return false;
   // "Also email Sam" is still a task; the connecting word is only skipped for the check.
   const core = t.replace(/^(?:also|and|then|plus|todo|to-do)\s+/i, "").replace(LEAD_IN, "");
-  return VERB_START.test(core) || INTENT.test(t);
+  if (VERB_START.test(core)) return true;
+  // "need to"/"should" make a task near the start ("we should book…") or on a short line, but not
+  // deep in a sentence of prose ("…the food is great, so we should plan four days").
+  const at = t.search(INTENT);
+  if (at < 0) return false;
+  return t.slice(0, at).trim().split(/\s+/).filter(Boolean).length <= 3 || t.length <= 60;
 }
 
 const task = (line: Line, checked = false): NewBlock => ({

@@ -4,9 +4,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { Folder, Note } from "@/lib/types";
 import { agentLabel } from "@/lib/charlie";
 import { isDesktop } from "@/lib/desktop";
-import { IconClock, IconFolder, IconMonitor, IconMoon, IconMove, IconNote, IconPin, IconPlus, IconSearch, IconSettings, IconSparkle, IconSun, IconTerminal, IconTrash, IconWand } from "../icons";
+import { IconClock, IconFolder, IconMonitor, IconMoon, IconMove, IconNote, IconPin, IconPlus, IconSearch, IconSettings, IconSparkle, IconSun, IconTasks, IconTerminal, IconTrash, IconWand } from "../icons";
 import { setThemeMode, themeMode } from "@/lib/theme";
 import { fuzzy, Highlight } from "./fuzzy";
+import { NoteIcon } from "./NoteIcon";
 import { plainText } from "./Markdown";
 import type { View } from "./Sidebar";
 
@@ -40,6 +41,7 @@ type Props = {
   onTogglePin: () => void;
   onMoveNote: () => void;
   onNewSubpage: () => void;
+  onShortcuts: () => void;
 };
 
 const RECENT = 8;
@@ -67,7 +69,7 @@ export function CommandPalette(p: Props) {
       fn();
     };
     const open = (n: Note) => close(() => p.onNavigate({ kind: "note", id: n.id }));
-    const noteItem = (group: Group, n: Note, icon = <IconNote size={15} />): Item => ({
+    const noteItem = (group: Group, n: Note, icon = <NoteIcon icon={n.icon} size={15} />): Item => ({
       key: `${group}-${n.id}`,
       group,
       icon,
@@ -106,6 +108,7 @@ export function CommandPalette(p: Props) {
       { key: "today", icon: <IconSun size={15} />, title: "Go to Today", hint: "⌘⇧H", run: close(() => p.onNavigate({ kind: "home" })) },
       { key: "all", icon: <IconNote size={15} />, title: "Go to All notes", run: close(() => p.onNavigate({ kind: "all" })) },
       { key: "pinned", icon: <IconPin size={15} />, title: "Go to Pinned", run: close(() => p.onNavigate({ kind: "pinned" })) },
+      { key: "tasks", icon: <IconTasks size={15} />, title: "Go to Tasks", sub: "Every open to-do", run: close(() => p.onNavigate({ kind: "tasks" })) },
       { key: "trash", icon: <IconTrash size={15} />, title: "Go to Trash", run: close(() => p.onNavigate({ kind: "trash" })) },
       { key: "folder", icon: <IconFolder size={15} />, title: "New folder", run: close(p.onNewFolder) },
       ...(
@@ -118,14 +121,15 @@ export function CommandPalette(p: Props) {
         .filter(([m]) => m !== themeMode())
         .map(([m, title, icon]) => ({ key: `theme-${m}`, icon, title, sub: "Appearance", run: close(() => setThemeMode(m)) })),
       { key: "settings", icon: <IconSettings size={15} />, title: "Settings & AI key", hint: "⌘,", run: close(p.onSettings) },
+      { key: "shortcuts", icon: <IconSearch size={15} />, title: "Keyboard shortcuts", hint: "⌘/", run: close(p.onShortcuts) },
       ...(isDesktop() ? [{ key: "agents", icon: <IconTerminal size={15} />, title: "charlie's agent settings", run: close(p.onAgentSettings) }] : []),
     ];
 
     if (!q) {
       const byEdit = [...p.notes].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
       return [
-        ...byEdit.filter((n) => !n.pinned).slice(0, RECENT).map((n) => noteItem("Recent", n, <IconClock size={15} />)),
-        ...byEdit.filter((n) => n.pinned).slice(0, 6).map((n) => noteItem("Pinned", n, <IconPin size={15} />)),
+        ...byEdit.filter((n) => !n.pinned).slice(0, RECENT).map((n) => noteItem("Recent", n, n.icon ? undefined : <IconClock size={15} />)),
+        ...byEdit.filter((n) => n.pinned).slice(0, 6).map((n) => noteItem("Pinned", n, n.icon ? undefined : <IconPin size={15} />)),
         ...[...actions, ...commands].map((a) => ({ ...a, group: "Actions" as const })),
       ];
     }

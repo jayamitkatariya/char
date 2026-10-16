@@ -3,6 +3,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { setThemeMode, useTheme } from "@/lib/theme";
+import { NoteIcon } from "./NoteIcon";
 import type { Folder, Note } from "@/lib/types";
 import {
   IconChevron,
@@ -23,6 +24,7 @@ import {
   IconSidebar,
   IconSparkle,
   IconSun,
+  IconTasks,
   IconTrash,
 } from "../icons";
 
@@ -31,6 +33,7 @@ export type View =
   | { kind: "all" }
   | { kind: "pinned" }
   | { kind: "trash" }
+  | { kind: "tasks" }
   | { kind: "folder"; id: string }
   | { kind: "note"; id: string };
 
@@ -56,6 +59,7 @@ type Props = {
   onNewSubpage: (parentId: string) => void;
   onNestNote: (noteId: string, parentId: string) => void;
   trashCount: number;
+  openTasks: number;
   onSearch: () => void;
   onAsk: () => void;
   onSettings: () => void;
@@ -296,7 +300,7 @@ export function Sidebar(props: Props) {
                 aria-expanded={open}
               >
                 <span className="group-hover:hidden">
-                  <IconNote size={14} />
+                  <NoteIcon icon={n.icon} size={14} />
                 </span>
                 <span className="hidden group-hover:inline">
                   <IconChevron size={12} open={open} />
@@ -304,7 +308,7 @@ export function Sidebar(props: Props) {
               </button>
             ) : (
               <span className="shrink-0 text-[var(--ink-faint)]">
-                <IconNote size={14} />
+                <NoteIcon icon={n.icon} size={14} />
               </span>
             )}
             <button className="min-w-0 flex-1 truncate py-[5px] text-left text-[13.5px]" onClick={() => onNavigate({ kind: "note", id: n.id })}>
@@ -513,6 +517,12 @@ export function Sidebar(props: Props) {
         <div className="space-y-0.5">
           {nav("Today", { kind: "home" }, <IconSun size={15} />)}
           {nav("All notes", { kind: "all" }, <IconNote size={15} />, <span className="font-mono text-[10.5px] text-[var(--ink-faint)]">{notes.length}</span>)}
+          {nav(
+            "Tasks",
+            { kind: "tasks" },
+            <IconTasks size={15} />,
+            props.openTasks ? <span className="font-mono text-[10.5px] text-[var(--ink-faint)]">{props.openTasks}</span> : undefined,
+          )}
         </div>
 
         {pinned.length > 0 && (

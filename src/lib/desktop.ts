@@ -25,7 +25,7 @@ export type AgentEvent = { runId: string } & (
   | { type: "stopped" }
 );
 export type ThemeMode = "system" | "light" | "dark";
-export type MenuAction = "settings" | "new-note" | "new-folder" | "search" | "ask" | "toggle-sidebar" | "home" | `theme-${ThemeMode}`;
+export type MenuAction = "settings" | "new-note" | "new-folder" | "search" | "ask" | "toggle-sidebar" | "home" | "shortcuts" | `theme-${ThemeMode}`;
 
 // Exposed by electron/preload.js. The notepad only runs inside the Mac app; a plain browser has no bridge.
 type Bridge = {

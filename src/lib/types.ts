@@ -20,6 +20,8 @@ export type Note = {
   createdAt: string;
   updatedAt: string;
   pinned: boolean;
+  /** An emoji shown in place of the page icon. */
+  icon?: string;
   /** Set while the note is in the Trash; notes there for 30 days are deleted for good. */
   deletedAt?: string | null;
 };

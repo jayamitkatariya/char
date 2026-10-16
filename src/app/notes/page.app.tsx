@@ -7,8 +7,11 @@ import type { EditorChange } from "@/components/app/Editor";
 import { setLinkState } from "@/components/app/linkStore";
 import { SettingsDialog } from "@/components/app/SettingsDialog";
 import { Sidebar, type View } from "@/components/app/Sidebar";
+import { FindBar } from "@/components/app/FindBar";
 import { MovePicker } from "@/components/app/MovePicker";
-import { HomeView, ListView, NoteView, TrashView, type SaveState } from "@/components/app/Views";
+import { ShortcutsDialog } from "@/components/app/ShortcutsDialog";
+import { HomeView, ListView, NoteView, TasksView, TrashView, type SaveState } from "@/components/app/Views";
+import { allTasks } from "@/lib/tasks";
 import { isConfigured, loadAISettings, saveAISettings, type AISettings } from "@/lib/ai";
 import { hasRunIn, isLongOutput, refreshAgentLabel, setRunFinisher, stopRunsOutside, type Run } from "@/lib/charlie";
 import { isDesktop, onMenu, onOpenLink, onUpdate, userName, type AgentEvent } from "@/lib/desktop";
@@ -32,6 +35,7 @@ function viewFromUrl(): View {
   if (q.get("v") === "all") return { kind: "all" };
   if (q.get("v") === "pinned") return { kind: "pinned" };
   if (q.get("v") === "trash") return { kind: "trash" };
+  if (q.get("v") === "tasks") return { kind: "tasks" };
   return { kind: "home" };
 }
 
@@ -44,6 +48,7 @@ function urlFor(v: View) {
     case "all":
     case "pinned":
     case "trash":
+    case "tasks":
       return `/notes?v=${v.kind}`;
     default:
       return "/notes";
@@ -95,6 +100,8 @@ function Workspace() {
   const [sidebarOpen, setSidebarOpen] = useState(() => !isMobile); // desktop: docked; mobile: drawer
   const [chatOpen, setChatOpen] = useState(false);
   const [palette, setPalette] = useState(false);
+  const [finding, setFinding] = useState(false);
+  const [shortcuts, setShortcuts] = useState(false);
   const [moving, setMoving] = useState<string | null>(null); // the note the "Move to…" picker is for
   const [settingsTab, setSettingsTab] = useState<null | "ai" | "agents" | "data" | "storage">(null);
   const [ai, setAI] = useState<AISettings | null>(() => loadAISettings(uid));
@@ -204,9 +211,13 @@ function Workspace() {
   // @-link chips read titles and navigate through this store.
   useEffect(() => {
     const titles = new Map<string, string>();
+    const icons = new Map<string, string>();
     for (const f of folders) titles.set(f.id, f.name);
-    for (const n of notes) titles.set(n.id, n.title.trim() || "Untitled");
-    setLinkState({ titles, open: (kind, id) => navigate(kind === "folder" ? { kind: "folder", id } : { kind: "note", id }) });
+    for (const n of notes) {
+      titles.set(n.id, n.title.trim() || "Untitled");
+      if (n.icon) icons.set(n.id, n.icon);
+    }
+    setLinkState({ titles, icons, open: (kind, id) => navigate(kind === "folder" ? { kind: "folder", id } : { kind: "note", id }) });
   }, [folders, notes, navigate]);
 
   /* ---------- note mutations (debounced while typing) ---------- */
@@ -360,6 +371,24 @@ function Workspace() {
     navigate({ kind: "note", id: copy.id });
   };
 
+  // From the Tasks view: through the open editor if the note is on screen, else headless.
+  const toggleTask = async (noteId: string, blockId: string, checked: boolean) => {
+    const { openEditor } = await import("@/components/app/editorRegistry");
+    const editor = openEditor(noteId);
+    if (editor) {
+      editor.updateBlock(blockId, { props: { checked } });
+      return;
+    }
+    await settle(noteId);
+    const note = ws.getNote(noteId);
+    if (!note) return;
+    const { setTaskInStoredNote } = await import("@/components/app/offscreen");
+    const patch = setTaskInStoredNote(note, blockId, checked);
+    if (patch) await ws.updateNote(noteId, patch);
+    else setToast("Couldn't find that to-do; open the note to tick it");
+  };
+  const openTaskCount = useMemo(() => allTasks(notes).filter((t) => !t.checked).length, [notes]);
+
   const copyLink = async (id: string) => {
     // char:// links open this note in the app from anywhere (Messages, Mail, a terminal).
     await navigator.clipboard.writeText(`char://note/${id}`);
@@ -504,6 +533,7 @@ function Workspace() {
       else if (action === "ask") setChatOpen((c) => !c);
       else if (action === "toggle-sidebar") setSidebarOpen((s) => !s);
       else if (action === "home") navigate({ kind: "home" });
+      else if (action === "shortcuts") setShortcuts(true);
       else if (action.startsWith("theme-")) setThemeMode(action.slice(6) as "system" | "light" | "dark");
     };
   });
@@ -527,6 +557,12 @@ function Workspace() {
       } else if (k === "n" && !e.shiftKey) {
         e.preventDefault();
         createNote();
+      } else if (k === "f" && !e.shiftKey && view.kind === "note") {
+        e.preventDefault();
+        setFinding(true);
+      } else if (k === "/") {
+        e.preventDefault();
+        setShortcuts((s) => !s);
       } else if (k === "h" && e.shiftKey) {
         e.preventDefault();
         navigate({ kind: "home" });
@@ -589,6 +625,7 @@ function Workspace() {
         onTitle={(title) => queueSave(currentNote.id, { title })}
         onEditorChange={(c: EditorChange) => queueSave(currentNote.id, c)}
         onTogglePin={() => togglePin(currentNote.id)}
+        onIcon={(icon) => saveNow(currentNote.id, { icon })}
         onPickFolder={() => setMoving(currentNote.id)}
         onCopyLink={() => copyLink(currentNote.id)}
         onDelete={() => deleteNote(currentNote.id)}
@@ -634,6 +671,8 @@ function Workspace() {
         onNewNote={() => createNote()}
       />
     );
+  } else if (view.kind === "tasks") {
+    main = <TasksView notes={notes} notePath={notePath} bar={bar} onNavigate={navigate} onToggle={(n, b, c) => void toggleTask(n, b, c)} />;
   } else if (view.kind === "trash") {
     main = (
       <TrashView
@@ -694,6 +733,7 @@ function Workspace() {
           onDeleteNote={deleteNote}
           onNewSubpage={(id) => void createSubpage(id)}
           onNestNote={nestNote}
+          openTasks={openTaskCount}
           trashCount={ws.trash.filter((n) => !ws.trash.some((t) => t.id === n.parentId && t.deletedAt === n.deletedAt)).length}
           onSearch={() => setPalette(true)}
           onAsk={() => ask()}
@@ -745,8 +785,12 @@ function Workspace() {
           onTogglePin={() => currentNote && togglePin(currentNote.id)}
           onMoveNote={() => currentNote && setMoving(currentNote.id)}
           onNewSubpage={() => currentNote && void createSubpage(currentNote.id)}
+          onShortcuts={() => setShortcuts(true)}
         />
       )}
+
+      {finding && view.kind === "note" && <FindBar key={view.id} onClose={() => setFinding(false)} />}
+      {shortcuts && <ShortcutsDialog onClose={() => setShortcuts(false)} />}
 
       {moving && noteById.has(moving) && (
         <MovePicker

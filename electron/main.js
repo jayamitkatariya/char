@@ -576,7 +576,10 @@ function buildMenu() {
     { role: "windowMenu" },
     {
       role: "help",
-      submenu: [{ label: "char on GitHub", click: () => shell.openExternal("https://github.com/jayamitkatariya/char") }],
+      submenu: [
+        page("Keyboard Shortcuts", "shortcuts", "CmdOrCtrl+/"),
+        { label: "char on GitHub", click: () => shell.openExternal("https://github.com/jayamitkatariya/char") },
+      ],
     },
   ]);
 }

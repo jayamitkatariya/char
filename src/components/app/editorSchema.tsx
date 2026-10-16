@@ -5,13 +5,15 @@ import { BlockNoteSchema, defaultBlockSpecs, defaultInlineContentSpecs, type Blo
 import { createReactBlockSpec, createReactInlineContentSpec } from "@blocknote/react";
 import { elapsed, stopRun, useRun, type Run } from "@/lib/charlie";
 import { agentBridge, type AgentStep, type TranscriptEntry } from "@/lib/desktop";
-import { IconFolder, IconNote, IconRetry, IconStop, IconTerminal, IconX } from "../icons";
-import { linkTitle, openLink, useLinkTitle, type LinkKind } from "./linkStore";
+import { IconFolder, IconRetry, IconStop, IconTerminal, IconX } from "../icons";
+import { linkTitle, openLink, useLinkIcon, useLinkTitle, type LinkKind } from "./linkStore";
+import { NoteIcon } from "./NoteIcon";
 
 /* ---------- @-links: an inline chip pointing at a note or folder ---------- */
 
 function LinkChip({ id, kind, title }: { id: string; kind: LinkKind; title: string }) {
   const live = useLinkTitle(id);
+  const icon = useLinkIcon(id);
   const missing = live === undefined;
   return (
     <span
@@ -22,7 +24,7 @@ function LinkChip({ id, kind, title }: { id: string; kind: LinkKind; title: stri
       onMouseDown={(e) => e.preventDefault()}
       onClick={() => !missing && openLink(kind, id)}
     >
-      {kind === "folder" ? <IconFolder size={13} /> : <IconNote size={13} />}
+      {kind === "folder" ? <IconFolder size={13} /> : <NoteIcon icon={icon} size={13} />}
       {(live ?? title) || "Untitled"}
     </span>
   );
@@ -51,6 +53,7 @@ const NoteLink = createReactInlineContentSpec(
 
 function PageRow({ pageId, title }: { pageId: string; title: string }) {
   const live = useLinkTitle(pageId);
+  const icon = useLinkIcon(pageId);
   const missing = live === undefined;
   return (
     <div
@@ -62,7 +65,7 @@ function PageRow({ pageId, title }: { pageId: string; title: string }) {
       onMouseDown={(e) => e.preventDefault()}
       onClick={() => !missing && openLink("note", pageId)}
     >
-      <IconNote size={16} />
+      <NoteIcon icon={missing ? null : icon} size={16} />
       <span className="page-block-title">{missing ? "Deleted page" : (live ?? title) || "Untitled"}</span>
     </div>
   );

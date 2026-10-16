@@ -9,6 +9,7 @@ export type LinkKind = "note" | "folder";
 
 type State = {
   titles: Map<string, string>; // id → current title or folder name
+  icons?: Map<string, string>; // note id → its emoji, if it has one
   open: (kind: LinkKind, id: string) => void;
 };
 
@@ -24,6 +25,17 @@ export const openLink = (kind: LinkKind, id: string) => state.open(kind, id);
 
 /** The current title, for exports written outside React (markdown, the AI's copy). */
 export const linkTitle = (id: string) => state.titles.get(id);
+
+export function useLinkIcon(id: string): string | undefined {
+  return useSyncExternalStore(
+    (cb) => {
+      listeners.add(cb);
+      return () => listeners.delete(cb);
+    },
+    () => state.icons?.get(id),
+    () => undefined,
+  );
+}
 
 export function useLinkTitle(id: string): string | undefined {
   return useSyncExternalStore(

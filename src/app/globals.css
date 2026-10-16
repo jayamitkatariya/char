@@ -760,7 +760,10 @@ html[data-fullscreen] .lights-left {
   line-height: 1.5;
   height: 1lh;
 }
-.char-editor .bn-block-content[data-content-type="checkListItem"] > div > input[type="checkbox"] {
+.char-editor .bn-block-content[data-content-type="checkListItem"] > div > input[type="checkbox"],
+.task-box {
+  appearance: none;
+  -webkit-appearance: none;
   appearance: none;
   -webkit-appearance: none;
   flex-shrink: 0;
@@ -775,17 +778,21 @@ html[data-fullscreen] .lights-left {
   cursor: pointer;
   transition: background-color 120ms ease, border-color 120ms ease, transform 120ms ease;
 }
-.char-editor .bn-block-content[data-content-type="checkListItem"] > div > input[type="checkbox"]:hover {
+.char-editor .bn-block-content[data-content-type="checkListItem"] > div > input[type="checkbox"]:hover,
+.task-box:hover {
   border-color: var(--ink-soft);
 }
-.char-editor .bn-block-content[data-content-type="checkListItem"] > div > input[type="checkbox"]:active {
+.char-editor .bn-block-content[data-content-type="checkListItem"] > div > input[type="checkbox"]:active,
+.task-box:active {
   transform: scale(0.92);
 }
-.char-editor .bn-block-content[data-content-type="checkListItem"] > div > input[type="checkbox"]:checked {
+.char-editor .bn-block-content[data-content-type="checkListItem"] > div > input[type="checkbox"]:checked,
+.task-box:checked {
   background: var(--accent);
   border-color: var(--accent);
 }
-.char-editor .bn-block-content[data-content-type="checkListItem"] > div > input[type="checkbox"]::after {
+.char-editor .bn-block-content[data-content-type="checkListItem"] > div > input[type="checkbox"]::after,
+.task-box::after {
   content: "";
   width: 9px;
   height: 5px;
@@ -795,11 +802,32 @@ html[data-fullscreen] .lights-left {
   transform: rotate(-45deg) scale(0);
   transition: transform 140ms ease;
 }
-.char-editor .bn-block-content[data-content-type="checkListItem"] > div > input[type="checkbox"]:checked::after {
+.char-editor .bn-block-content[data-content-type="checkListItem"] > div > input[type="checkbox"]:checked::after,
+.task-box:checked::after {
   transform: rotate(-45deg) scale(1);
 }
 .char-editor [data-content-type="checkListItem"][data-checked="true"] .bn-inline-content {
   color: var(--ink-faint);
   text-decoration: line-through;
   text-decoration-color: var(--hairline-strong);
+}
+
+.task-box:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ⌘F matches (CSS Custom Highlight API; see FindBar) */
+::highlight(char-find) {
+  background-color: var(--highlight);
+  color: var(--ink);
+}
+::highlight(char-find-current) {
+  background-color: color-mix(in srgb, var(--sun) 55%, transparent);
+  color: var(--ink);
+}
+
+/* The Tasks view's boxes: the editor's checkbox look, aligned to a 15px line. */
+input.task-box {
+  margin: 4px 0 0;
 }

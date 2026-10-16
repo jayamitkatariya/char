@@ -67,6 +67,14 @@ export const IconForward = (p: IconProps) => (
     <path d="m9 6 6 6-6 6" />
   </Svg>
 );
+export const IconTasks = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="3.5" y="4" width="5" height="5" rx="1.2" />
+    <path d="m4.8 6.6 1.1 1.1 1.8-2" />
+    <rect x="3.5" y="14" width="5" height="5" rx="1.2" />
+    <path d="M12 6.5h8.5M12 16.5h8.5" />
+  </Svg>
+);
 export const IconMoon = (p: IconProps) => (
   <Svg {...p}>
     <path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z" />

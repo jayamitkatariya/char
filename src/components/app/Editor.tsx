@@ -60,11 +60,13 @@ type Props = {
   /** Makes an empty page inside this one (for /page). */
   onCreateSubpage: () => Promise<Note>;
   onToast: (msg: string) => void;
+  /** Puts the cursor in the body as soon as the editor is ready. */
+  autoFocus?: boolean;
   /** Lets the parent push text in (e.g. "insert AI answer"). */
   registerInsert?: (fn: ((markdown: string) => void) | null) => void;
 };
 
-export default function Editor({ note, notes, folders, folderPath, onChange, onCreateNote, onCreateSubpage, onToast, registerInsert }: Props) {
+export default function Editor({ note, notes, folders, folderPath, onChange, onCreateNote, onCreateSubpage, onToast, registerInsert, autoFocus }: Props) {
   const initial = useMemo(() => {
     if (!note.blocks) return undefined;
     try {
@@ -94,6 +96,17 @@ export default function Editor({ note, notes, folders, folderPath, onChange, onC
     silent.current = true;
     editor.replaceBlocks(editor.document, blocks);
     silent.current = false;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editor]);
+
+  useEffect(() => {
+    if (!autoFocus) return;
+    const t = setTimeout(() => {
+      const last = editor.document[editor.document.length - 1];
+      if (last) editor.setTextCursorPosition(last, "end");
+      editor.focus();
+    }, 0);
+    return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editor]);
 
