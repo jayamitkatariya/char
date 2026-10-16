@@ -171,11 +171,25 @@ export function useWorkspace() {
     });
   };
 
-  /** Deletes for good: a note in the Trash with its subpages, or (from cleanup) any note. */
+  /**
+   * Deletes for good. From the Trash: the note and the subpages trashed with it. A live note (an
+   * empty one being cleaned up): it and its live subpages. Anything else under it (say, a subpage
+   * trashed earlier on its own) is kept and just loses its parent.
+   */
   const purgeNote = async (id: string) => {
     await commit((d) => {
-      const gone = subpagesOf(d.notes, id).add(id);
-      return { ...d, notes: d.notes.filter((n) => !gone.has(n.id)) };
+      const byId = new Map(d.notes.map((n) => [n.id, n]));
+      const target = byId.get(id);
+      if (!target) return d;
+      const gone = new Set([id]);
+      for (const k of subpagesOf(d.notes, id)) {
+        const n = byId.get(k);
+        if (n && (target.deletedAt ? n.deletedAt === target.deletedAt : !n.deletedAt)) gone.add(k);
+      }
+      return {
+        ...d,
+        notes: d.notes.filter((n) => !gone.has(n.id)).map((n) => (n.parentId && gone.has(n.parentId) ? { ...n, parentId: null } : n)),
+      };
     });
   };
 

@@ -68,8 +68,10 @@ export function FindBar({ onClose }: { onClose: () => void }) {
     const mo = new MutationObserver(() => {
       clearTimeout(t);
       t = setTimeout(() => {
-        search(input.current?.value ?? "");
-        paint(ranges.current, Math.min(at, ranges.current.length - 1));
+        const found = search(input.current?.value ?? "");
+        const n = Math.max(0, Math.min(at, found.length - 1));
+        setAt(n);
+        paint(found, n);
       }, 150);
     });
     mo.observe(root, { subtree: true, childList: true, characterData: true });

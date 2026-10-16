@@ -306,11 +306,8 @@ function Workspace() {
   };
 
   const deleteNote = async (id: string) => {
-    const entry = pending.current.get(id);
-    if (entry) {
-      clearTimeout(entry.timer);
-      pending.current.delete(id);
-    }
+    // The Trash can give it back, so the last keystrokes are saved first, not dropped.
+    for (const k of [id, ...subpagesOf(notes, id)]) await settle(k);
     const doomed = notes.find((n) => n.id === id);
     const inside = doomed ? subpagesOf(notes, id) : new Set<string>();
     await ws.deleteNote(id);
@@ -379,6 +376,7 @@ function Workspace() {
     const editor = openEditor(noteId);
     if (editor) {
       editor.updateBlock(blockId, { props: { checked } });
+      await settle(noteId); // written before anyone reads the file (the char command)
       return;
     }
     await settle(noteId);
@@ -554,7 +552,8 @@ function Workspace() {
       switch (cmd) {
         case "create": {
           const parent = str(a.parentId) ? live(str(a.parentId)) : null;
-          const folderId = parent ? parent.folderId : targetFolder(str(a.folderId) || undefined);
+          // Not "the folder on screen": where a command's note lands mustn't depend on the UI.
+          const folderId = parent ? parent.folderId : str(a.folderId) && folderById.has(str(a.folderId)) ? str(a.folderId) : DEFAULT_FOLDER;
           await ensureFolder(folderId);
           const note = await ws.createNote(folderId, { title: str(a.title), parentId: parent?.id ?? null, icon: str(a.icon) || undefined });
           if (str(a.markdown)) await writeBody(note.id, str(a.markdown), "replace");

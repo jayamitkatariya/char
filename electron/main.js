@@ -123,7 +123,7 @@ ipcMain.handle(
     if (!THEMES.has(theme)) return;
     nativeTheme.themeSource = theme;
     writeJsonAtomic(userFile("prefs.json"), { ...readJson(userFile("prefs.json"), {}), theme });
-    buildMenu();
+    Menu.setApplicationMenu(buildMenu()); // so View → Appearance ticks the new choice
   }),
 );
 nativeTheme.on("updated", () => win?.setBackgroundColor(windowColor()));

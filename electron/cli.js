@@ -27,7 +27,7 @@ Writing (goes through the app, which updates live):
   char new TITLE [--folder F | --in NOTE] [--icon 🚀] [BODY | --stdin]
   char append NOTE (TEXT | --stdin)     add Markdown at the end
   char prepend NOTE (TEXT | --stdin)    add Markdown at the start
-  char replace NOTE (TEXT | --stdin)    replace the whole body
+  char replace NOTE (TEXT | --stdin)    replace the whole body (--empty clears it)
   char rename NOTE TITLE
   char move NOTE (--folder F | --in NOTE)
   char pin NOTE | char unpin NOTE
@@ -45,7 +45,7 @@ Add --json to any command for machine-readable output. Markdown: "- [ ] x" makes
 
 /* ---------- arguments ---------- */
 
-const BOOL = new Set(["json", "stdin", "pinned", "all", "none", "help"]);
+const BOOL = new Set(["json", "stdin", "pinned", "all", "none", "help", "empty"]);
 
 function parseArgs(argv) {
   const pos = [];
@@ -205,7 +205,9 @@ function tasksOf(n) {
 
 /* ---------- talking to the app ---------- */
 
-function request(cmd, args, timeoutMs = 35000) {
+// Longer than the app's own limits (25 s to open a window + 30 s to answer), so the command never
+// reports a failure for a change that then happens anyway.
+function request(cmd, args, timeoutMs = 70000) {
   return new Promise((resolve, reject) => {
     const conn = net.createConnection(socketPath());
     let buf = "";
@@ -264,15 +266,16 @@ async function app(cmd, args) {
   fail("char didn't start in time.");
 }
 
-function readStdin() {
-  try {
-    return fs.readFileSync(0, "utf8");
-  } catch {
-    return "";
-  }
+// Streamed, not readFileSync(0): that throws EAGAIN on the non-blocking pipes agents often use.
+async function readStdin() {
+  if (process.stdin.isTTY) fail("--stdin needs text piped in, e.g. char append NOTE --stdin < notes.md", 2);
+  let text = "";
+  process.stdin.setEncoding("utf8");
+  for await (const chunk of process.stdin) text += chunk;
+  return text;
 }
 
-const bodyFrom = (flags, rest) => {
+const bodyFrom = async (flags, rest) => {
   if (flags.stdin || (rest.length === 1 && rest[0] === "-")) return readStdin();
   if (flags.body !== undefined) return String(flags.body);
   return rest.join(" ");
@@ -391,7 +394,7 @@ async function main(argv) {
     case "new":
     case "create": {
       const [title, ...bodyWords] = rest;
-      const args = { title: title || "", markdown: bodyFrom(flags, bodyWords), icon: flags.icon || "" };
+      const args = { title: title || "", markdown: await bodyFrom(flags, bodyWords), icon: flags.icon || "" };
       if (!args.title.trim() && !args.markdown.trim()) fail("Give the note a title (and optionally a body).", 2);
       if (flags.in) args.parentId = pickNoteStrict(ws, flags.in, ws.notes).id;
       else if (flags.folder) args.folderId = pickFolder(ws, flags.folder).id;
@@ -405,8 +408,9 @@ async function main(argv) {
     case "write": {
       const [ref, ...words] = rest;
       const n = pickNoteStrict(ws, ref, ws.notes);
-      const markdown = bodyFrom(flags, words);
-      if (!markdown.trim() && cmd !== "replace") fail("Nothing to add. Pass text or --stdin.", 2);
+      const markdown = await bodyFrom(flags, words);
+      // An empty replace would wipe the note with no way back, so it has to be asked for.
+      if (!markdown.trim() && !(cmd === "replace" && flags.empty)) fail(cmd === "replace" ? "Nothing to replace it with. Pass text or --stdin (or --empty to clear the note)." : "Nothing to add. Pass text or --stdin.", 2);
       const mode = cmd === "write" ? "append" : cmd;
       await app("write", { id: n.id, markdown, mode });
       return out(`${mode === "replace" ? "Replaced" : mode === "prepend" ? "Added to the top of" : "Added to"} “${ws.title(n)}”`, { id: n.id, mode });
